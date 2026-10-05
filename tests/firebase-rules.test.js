@@ -207,6 +207,20 @@ test('closed signup links reject new requests', { skip: !enabled }, async () => 
   await assertFails(setDoc(doc(db, 'sessions', sessionId, 'entries', 'late-player'), request('late-player')));
 });
 
+test('anonymous players can resolve today’s day pointer for the play desk', { skip: !enabled }, async () => {
+  await env.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), 'daySessions', '2026-10-05'), {
+      currentSessionId: sessionId, cycle: 1, updatedAt: new Date(),
+    });
+  });
+  const db = env.authenticatedContext('desk-visitor', anonymous).firestore();
+  await assertSucceeds(getDoc(doc(db, 'daySessions', '2026-10-05')));
+  await assertFails(getDocs(collection(db, 'daySessions')));
+  await assertFails(setDoc(doc(db, 'daySessions', '2026-10-06'), {
+    currentSessionId: 'x', cycle: 1,
+  }));
+});
+
 test('organizer can add another email and that account is authorized immediately', { skip: !enabled }, async () => {
   const google = { email: 'owner@example.com', firebase: { sign_in_provider: 'google.com' } };
   const helper = { email: 'helper@example.com', firebase: { sign_in_provider: 'google.com' } };

@@ -307,7 +307,10 @@ service cloud.firestore {
     }
 
     match /daySessions/{date} {
-      allow read, write: if organizer();
+      // Players may resolve today's desk/signup pointer by exact date get only.
+      allow get: if organizer() || anonymousPlayer();
+      allow list: if organizer();
+      allow create, update, delete: if organizer();
     }
 
     match /players/{playerId} {

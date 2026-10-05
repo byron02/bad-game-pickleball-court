@@ -1,17 +1,12 @@
 import {
-  getPublicSession, getPublicAuthUid, watchPublicRoster,
+  getPublicPlaySession, getPublicAuthUid, watchPublicRoster,
   playerCheckIn, playerSitOut, playerResume, playerLeaveToday,
   requestPartner, cancelPartnerRequest, approvePartnerRequest,
   declinePartnerRequest, clearMyPartner, setPlayPin, unlockPlayPin,
 } from '../src/firebaseStore.js';
 import { watchPublicPlayBoard } from '../src/courtStore.js';
 
-const token = new URLSearchParams(location.search).get('token')?.trim();
-if (token) {
-  document.querySelector('.brand').href = `/play?token=${encodeURIComponent(token)}`;
-  const signup = document.getElementById('signupLink');
-  if (signup) signup.href = `/join?token=${encodeURIComponent(token)}`;
-}
+const token = new URLSearchParams(location.search).get('token')?.trim() || null;
 
 const $ = (id) => document.getElementById(id);
 const ui = {
@@ -449,40 +444,47 @@ ui.sitOut.addEventListener('click', (event) => runAction('sit-out', event.curren
 ui.resume.addEventListener('click', (event) => runAction('resume', event.currentTarget));
 ui.leave.addEventListener('click', (event) => runAction('leave', event.currentTarget));
 
-if (!token) {
-  ui.missing.hidden = false;
-  ui.desk.hidden = true;
-} else {
-  try {
-    myUid = await getPublicAuthUid();
-    const { session: next } = await getPublicSession(token);
-    session = next;
-    ui.desk.hidden = false;
-    ui.sessionDate.textContent = formatDate(session.date);
-    ui.sessionState.textContent = session.open ? 'Open' : 'Closed';
-    ui.sessionState.className = `badge badge-${session.open ? 'green' : 'red'}`;
-    stopRoster = await watchPublicRoster(session.id, (entries, error) => {
-      if (error) {
-        showAlert(error.message || 'Could not load the roster.');
-        return;
-      }
-      roster = entries;
-      const mine = myEntry();
-      stopBoard?.();
-      stopBoard = mine?.playerId
-        ? watchPublicPlayBoard(session.id, mine.playerId, (nextBoard, boardError) => {
-          if (boardError) return;
-          board = nextBoard;
-          renderBoard();
-        })
-        : null;
-      refreshAll();
-    });
-  } catch (error) {
-    ui.desk.hidden = true;
-    ui.missing.hidden = false;
-    showAlert(error.message || 'This player desk link is invalid or closed.');
+function bindSessionLinks(sessionId) {
+  const href = `/play?token=${encodeURIComponent(sessionId)}`;
+  document.querySelector('.brand').href = href;
+  const signup = document.getElementById('signupLink');
+  if (signup) signup.href = `/join?token=${encodeURIComponent(sessionId)}`;
+  if (!token) {
+    history.replaceState(null, '', href);
   }
+}
+
+try {
+  myUid = await getPublicAuthUid();
+  const { session: next } = await getPublicPlaySession(token);
+  session = next;
+  bindSessionLinks(session.id);
+  ui.missing.hidden = true;
+  ui.desk.hidden = false;
+  ui.sessionDate.textContent = formatDate(session.date);
+  ui.sessionState.textContent = session.open ? 'Open' : 'Closed';
+  ui.sessionState.className = `badge badge-${session.open ? 'green' : 'red'}`;
+  stopRoster = await watchPublicRoster(session.id, (entries, error) => {
+    if (error) {
+      showAlert(error.message || 'Could not load the roster.');
+      return;
+    }
+    roster = entries;
+    const mine = myEntry();
+    stopBoard?.();
+    stopBoard = mine?.playerId
+      ? watchPublicPlayBoard(session.id, mine.playerId, (nextBoard, boardError) => {
+        if (boardError) return;
+        board = nextBoard;
+        renderBoard();
+      })
+      : null;
+    refreshAll();
+  });
+} catch (error) {
+  ui.desk.hidden = true;
+  ui.missing.hidden = false;
+  showAlert(error.message || 'Today’s player desk is not open yet.');
 }
 
 window.addEventListener('beforeunload', () => {

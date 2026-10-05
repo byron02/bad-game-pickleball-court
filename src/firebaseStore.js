@@ -480,6 +480,31 @@ export async function getPublicSession(sessionId) {
   return { session: normalizedSession(snapshot) };
 }
 
+/** Resolve today's open session for /play when no share token is in the URL. */
+export async function getPublicPlaySession(sessionId = null) {
+  await ensurePublicAuth();
+  const explicit = String(sessionId || '').trim();
+  if (explicit) {
+    const snapshot = await getDoc(sessionRef(explicit));
+    if (!snapshot.exists()) throw error('This player desk link has expired or is closed.', 'not-found');
+    const session = normalizedSession(snapshot);
+    if (!session.open) throw error('Today’s player desk is closed.', 'failed-precondition');
+    return { session };
+  }
+  const date = todayManila();
+  const pointer = await getDoc(dayRef(date));
+  if (!pointer.exists() || !pointer.data().currentSessionId) {
+    throw error('No open play desk for today yet. Ask the organizer to open the session.', 'not-found');
+  }
+  const snapshot = await getDoc(sessionRef(pointer.data().currentSessionId));
+  if (!snapshot.exists()) {
+    throw error('No open play desk for today yet. Ask the organizer to open the session.', 'not-found');
+  }
+  const session = normalizedSession(snapshot);
+  if (!session.open) throw error('Today’s player desk is closed.', 'failed-precondition');
+  return { session };
+}
+
 function directoryPayload(player, overrides = {}) {
   const name = overrides.name || player.name;
   return {
