@@ -48,13 +48,24 @@
         <section class="dashboard-head">
           <div>
             <div class="eyebrow">Open play · Organizer dashboard</div>
-            <h1>Today's session</h1>
-            <p>Check capacity, share the signup link, and adjust today's settings.</p>
+            <h1>Session days</h1>
+            <p>Jump between today and the next days, then share that day’s signup link.</p>
           </div>
           <div class="head-actions">
             <button id="refreshButton" class="button button-outline" type="button">Refresh</button>
             <button id="copyLinkButton" class="button button-primary" type="button" disabled>Copy signup link</button>
           </div>
+        </section>
+
+        <section class="day-strip-panel" aria-label="Upcoming session days">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">Schedule</span>
+              <h2>Next days</h2>
+              <p>Each day has its own roster, waitlist, and signup link.</p>
+            </div>
+          </div>
+          <div id="dayStrip" class="day-strip" role="tablist" aria-label="Choose a session day"></div>
         </section>
 
         <section class="admin-hero" aria-label="Session capacity">
@@ -81,8 +92,8 @@
           <div class="panel-head">
             <div>
               <span class="eyebrow">Session settings</span>
-              <h2>Today's signup</h2>
-              <p>Set the session date and reservation limit.</p>
+              <h2>Day signup</h2>
+              <p>Pick a date, set the player limit, and share that day’s link.</p>
             </div>
           </div>
           <form id="settingsForm">
@@ -97,8 +108,8 @@
             <code id="shareLinkText">Loading signup link…</code>
             <button id="copyLinkSecondary" class="button button-outline button-small" type="button" disabled>Copy link</button>
           </div>
-          <button id="resetButton" class="button button-danger-outline button-wide" type="button">Reset today's signups</button>
-          <p class="field-help">Reset clears the session roster and requests. Player profiles stay in the directory.</p>
+          <button id="resetButton" class="button button-danger-outline button-wide" type="button">Reset this day’s signups</button>
+          <p class="field-help">Reset clears this day’s roster and requests. Player profiles stay in the directory.</p>
         </section>
       </section>
 

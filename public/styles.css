@@ -163,6 +163,57 @@ h1, h2, h3, p { margin: 0; }
 .hero-progress .capacity-track { background: rgb(255 255 255 / 28%); margin: 0 0 12px; }
 .hero-progress .capacity-track span { background: #fff; }
 .hero-progress strong { font-size: 13px; }
+.day-strip-panel {
+  margin: 0 0 18px;
+  padding: 18px 20px;
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: 0 5px 18px rgb(16 42 72 / 3%);
+}
+.day-strip {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 4px;
+}
+.day-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-height: 72px;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-tint);
+  color: var(--navy);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .15s, background .15s, transform .15s;
+}
+.day-chip:hover { border-color: #9dbce0; transform: translateY(-1px); }
+.day-chip[aria-selected="true"] {
+  border-color: var(--blue);
+  background: var(--blue-pale);
+}
+.day-chip-label {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--blue);
+}
+.day-chip-date {
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: -.02em;
+}
+.day-chip-sub {
+  font-size: 10px;
+  color: var(--muted);
+  font-weight: 650;
+}
 .metric-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 17px 0 20px; }
 .court-kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .metric { display: flex; flex-direction: column; min-height: 108px; padding: 15px 17px; background: white; border: 1px solid var(--line); border-radius: 13px; }
@@ -467,6 +518,7 @@ h1, h2, h3, p { margin: 0; }
   .admin-hero { align-items: stretch; flex-direction: column; gap: 18px; padding: 22px; }
   .hero-progress { flex: auto; }
   .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .day-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .court-kpi-grid { grid-template-columns: 1fr; }
   .admin-grid { grid-template-columns: 1fr; }
   .players-desk { grid-template-columns: 1fr; }

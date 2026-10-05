@@ -14,6 +14,7 @@ const ui = {
   sessionDate: $('sessionDateInput'), capacityInput: $('capacityInput'), settingsForm: $('settingsForm'),
   confirmed: $('adminConfirmed'), capacity: $('adminCapacity'), fill: $('adminCapacityFill'), availability: $('adminAvailability'),
   dateLabel: $('adminDateLabel'), checkedIn: $('checkedInMetric'), pending: $('pendingMetric'), waitlist: $('waitlistMetric'), open: $('openMetric'),
+  dayStrip: $('dayStrip'),
   pendingCount: $('pendingCountLabel'), pendingList: $('pendingList'), confirmedList: $('confirmedList'),
   waitlistCount: $('waitlistCountLabel'), waitlistList: $('waitlistList'), waitlistBlock: $('waitlistBlock'),
   todayCount: $('todayCountLabel'), todaySpotsNote: $('todaySpotsNote'),
@@ -80,10 +81,73 @@ function friendlyError(error) {
   return error?.message || 'Something went wrong. Please try again.';
 }
 
+function manilaToday() {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date());
+}
+
+function shiftDate(ymd, days) {
+  const [year, month, day] = ymd.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function dayChipLabel(ymd, today = manilaToday()) {
+  if (ymd === today) return 'Today';
+  if (ymd === shiftDate(today, 1)) return 'Tomorrow';
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'UTC', weekday: 'short',
+  }).format(new Date(`${ymd}T12:00:00Z`));
+}
+
+function dayChipDate(ymd) {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'UTC', month: 'short', day: 'numeric',
+  }).format(new Date(`${ymd}T12:00:00Z`));
+}
+
+function upcomingDates(count = 7) {
+  const today = manilaToday();
+  return Array.from({ length: count }, (_, index) => shiftDate(today, index));
+}
+
+function renderDayStrip(activeDate = selectedDate || manilaToday()) {
+  if (!ui.dayStrip) return;
+  const today = manilaToday();
+  ui.dayStrip.replaceChildren();
+  for (const date of upcomingDates(7)) {
+    const chip = node('button', 'day-chip');
+    chip.type = 'button';
+    chip.dataset.date = date;
+    chip.setAttribute('role', 'tab');
+    chip.setAttribute('aria-selected', date === activeDate ? 'true' : 'false');
+    chip.append(node('span', 'day-chip-label', dayChipLabel(date, today)));
+    chip.append(node('span', 'day-chip-date', dayChipDate(date)));
+    chip.append(node('span', 'day-chip-sub', date === today ? 'Current day' : 'Open this day'));
+    ui.dayStrip.append(chip);
+  }
+}
+
+async function switchSessionDate(date) {
+  if (!date || date === selectedDate) {
+    renderDayStrip(date);
+    return;
+  }
+  showAlert('Opening that day’s session…', 'success');
+  await beginDashboard(date);
+  showAlert(`Now managing ${dayChipLabel(date)} · ${dayChipDate(date)}.`, 'success');
+}
+
 function formatDate(value) {
-  if (!value) return 'Today';
-  const date = new Date(`${value}T12:00:00`);
-  return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }).format(date);
+  if (!value) return '—';
+  const today = manilaToday();
+  const label = dayChipLabel(value, today);
+  const pretty = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'UTC', weekday: 'long', month: 'long', day: 'numeric',
+  }).format(new Date(`${value}T12:00:00Z`));
+  return label === 'Today' || label === 'Tomorrow' ? `${label} · ${pretty}` : pretty;
 }
 
 function initials(name) {
@@ -470,6 +534,7 @@ function renderDashboard(data) {
   ui.shareLink.textContent = activeShareLink;
   ui.copyLink.disabled = false;
   ui.copyLinkSecondary.disabled = false;
+  renderDayStrip(session.date || selectedDate);
 }
 
 async function beginDashboard(date) {
@@ -757,6 +822,19 @@ $('addPlayerForm')?.addEventListener('submit', async (event) => {
     showAlert(friendlyError(error));
   } finally {
     save.disabled = false;
+  }
+});
+
+ui.dayStrip?.addEventListener('click', async (event) => {
+  const chip = event.target.closest('button.day-chip[data-date]');
+  if (!chip) return;
+  chip.disabled = true;
+  try {
+    await switchSessionDate(chip.dataset.date);
+  } catch (error) {
+    showAlert(friendlyError(error));
+  } finally {
+    chip.disabled = false;
   }
 });
 
