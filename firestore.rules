@@ -17,6 +17,20 @@ service cloud.firestore {
         get(/databases/$(database)/documents/organizers/$(request.auth.uid)).data.active == true;
     }
 
+    function authEmail() {
+      return request.auth.token.email is string
+        ? request.auth.token.email.lower()
+        : '';
+    }
+
+    function validOrganizerEmail(email) {
+      return email is string &&
+        email.size() >= 5 &&
+        email.size() <= 254 &&
+        email == email.lower() &&
+        email.matches('^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$');
+    }
+
     function validName(name) {
       return name is string && name.size() >= 2 && name.size() <= 60;
     }
@@ -88,10 +102,51 @@ service cloud.firestore {
     }
 
     match /organizers/{uid} {
-      // Add the first organizer document from Firebase Console or Admin SDK.
-      // Clients cannot grant themselves organizer access.
-      allow get: if signedIn() && request.auth.uid == uid;
-      allow list, create, update, delete: if false;
+      // First organizer still comes from Console/Admin SDK. Extra organizers are
+      // invited by email; invitees may claim their own document once.
+      allow get: if signedIn() && (request.auth.uid == uid || organizer());
+      allow list: if organizer();
+      allow create: if signedIn() &&
+        request.auth.uid == uid &&
+        authEmail().size() > 0 &&
+        request.resource.data.active == true &&
+        validOrganizerEmail(request.resource.data.email) &&
+        request.resource.data.email == authEmail() &&
+        exists(/databases/$(database)/documents/organizerInvites/$(authEmail())) &&
+        get(/databases/$(database)/documents/organizerInvites/$(authEmail())).data.active == true;
+      allow update: if (organizer() &&
+          request.resource.data.active is bool &&
+          (!request.resource.data.keys().hasAny(['email']) ||
+            request.resource.data.email == null ||
+            validOrganizerEmail(request.resource.data.email))) ||
+        (signedIn() &&
+          request.auth.uid == uid &&
+          authEmail().size() > 0 &&
+          request.resource.data.active == true &&
+          validOrganizerEmail(request.resource.data.email) &&
+          request.resource.data.email == authEmail() &&
+          exists(/databases/$(database)/documents/organizerInvites/$(authEmail())) &&
+          get(/databases/$(database)/documents/organizerInvites/$(authEmail())).data.active == true);
+      allow delete: if false;
+    }
+
+    match /organizerInvites/{email} {
+      allow get: if organizer() ||
+        (signedIn() && authEmail() == email);
+      allow list: if organizer();
+      allow create: if organizer() &&
+        validOrganizerEmail(email) &&
+        request.resource.data.email == email &&
+        request.resource.data.active == true &&
+        request.resource.data.invitedByUid == request.auth.uid;
+      allow update: if organizer() ||
+        (signedIn() &&
+          authEmail() == email &&
+          resource.data.active == true &&
+          request.resource.data.active == false &&
+          request.resource.data.claimedUid == request.auth.uid &&
+          request.resource.data.email == email);
+      allow delete: if organizer();
     }
 
     match /daySessions/{date} {

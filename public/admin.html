@@ -42,6 +42,7 @@
         <a href="#roster" data-view="roster">Players</a>
         <a href="#directory" data-view="directory">Directory</a>
         <a href="#courts" data-view="courts">Courts</a>
+        <a href="#settings" data-view="settings">Settings</a>
       </nav>
 
       <section class="admin-view" data-view="overview" id="overview">
@@ -253,12 +254,72 @@
         </section>
       </section>
 
+      <section class="admin-view" data-view="settings" id="settings" hidden>
+        <section class="dashboard-head">
+          <div>
+            <div class="eyebrow">Desk access</div>
+            <h1>Settings</h1>
+            <p>See who can open the organizer desk and invite another email.</p>
+          </div>
+        </section>
+
+        <section class="panel settings-panel">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">Signed in</span>
+              <h2>Your account</h2>
+              <p>This Google account is managing the desk right now.</p>
+            </div>
+          </div>
+          <p id="organizerAccountEmail" class="organizer-account-email">—</p>
+        </section>
+
+        <section class="panel settings-panel">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">Organizers</span>
+              <h2>Invite by email</h2>
+              <p>Add a Google account email. They get access the next time they sign in on /admin.</p>
+            </div>
+          </div>
+          <form id="organizerInviteForm">
+            <label class="field-label" for="organizerInviteEmail">Organizer email</label>
+            <input id="organizerInviteEmail" name="email" class="input" type="email" autocomplete="email" required placeholder="name@gmail.com">
+            <button class="button button-primary button-wide" type="submit">Invite organizer</button>
+          </form>
+          <p class="field-help">They must use that exact Google account. You can cancel a pending invite anytime.</p>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">Active access</span>
+              <h2>Current organizers</h2>
+              <p>Remove access if someone should no longer manage open play.</p>
+            </div>
+          </div>
+          <div id="organizerList" class="entry-list organizer-access-list" aria-live="polite"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">Waiting to join</span>
+              <h2>Pending invites</h2>
+              <p>These emails can claim organizer access on their next sign-in.</p>
+            </div>
+          </div>
+          <div id="organizerInviteList" class="entry-list organizer-access-list" aria-live="polite"></div>
+        </section>
+      </section>
+
       <nav class="mobile-nav" aria-label="Mobile dashboard sections">
         <button type="button" data-view="overview" class="current"><span>Today</span></button>
         <button type="button" data-view="requests"><span>Requests</span><span id="mobilePendingPill" class="mobile-nav-badge" hidden>0</span></button>
         <button type="button" data-view="roster"><span>Players</span></button>
         <button type="button" data-view="directory"><span>Directory</span></button>
         <button type="button" data-view="courts"><span>Courts</span></button>
+        <button type="button" data-view="settings"><span>Settings</span></button>
       </nav>
     </div>
   </main>

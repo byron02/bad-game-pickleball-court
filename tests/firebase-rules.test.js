@@ -149,3 +149,44 @@ test('closed signup links reject new requests', { skip: !enabled }, async () => 
   const db = env.authenticatedContext('late-player', anonymous).firestore();
   await assertFails(setDoc(doc(db, 'sessions', sessionId, 'entries', 'late-player'), request('late-player')));
 });
+
+test('organizer can invite by email and invitee can claim access', { skip: !enabled }, async () => {
+  const google = { email: 'owner@example.com', firebase: { sign_in_provider: 'google.com' } };
+  const invitee = { email: 'helper@example.com', firebase: { sign_in_provider: 'google.com' } };
+  await env.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), 'organizers', 'owner'), {
+      active: true, email: 'owner@example.com',
+    });
+  });
+  const ownerDb = env.authenticatedContext('owner', google).firestore();
+  await assertSucceeds(setDoc(doc(ownerDb, 'organizerInvites', 'helper@example.com'), {
+    email: 'helper@example.com',
+    active: true,
+    invitedByUid: 'owner',
+    invitedByEmail: 'owner@example.com',
+    createdAt: new Date(),
+    claimedUid: null,
+    claimedAt: null,
+  }));
+  const inviteeDb = env.authenticatedContext('helper', invitee).firestore();
+  await assertSucceeds(setDoc(doc(inviteeDb, 'organizers', 'helper'), {
+    active: true, email: 'helper@example.com',
+  }));
+  await assertSucceeds(updateDoc(doc(inviteeDb, 'organizerInvites', 'helper@example.com'), {
+    active: false, claimedUid: 'helper', claimedAt: new Date(),
+  }));
+  await assertFails(setDoc(doc(inviteeDb, 'organizers', 'stranger'), {
+    active: true, email: 'helper@example.com',
+  }));
+});
+
+test('uninvited users still cannot grant themselves organizer access', { skip: !enabled }, async () => {
+  const google = { email: 'outsider@example.com', firebase: { sign_in_provider: 'google.com' } };
+  const db = env.authenticatedContext('outsider', google).firestore();
+  await assertFails(setDoc(doc(db, 'organizers', 'outsider'), {
+    active: true, email: 'outsider@example.com',
+  }));
+  await assertFails(setDoc(doc(db, 'organizerInvites', 'friend@example.com'), {
+    email: 'friend@example.com', active: true, invitedByUid: 'outsider',
+  }));
+});

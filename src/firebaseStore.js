@@ -24,6 +24,7 @@ import {
   runTransaction,
   serverTimestamp,
   setDoc,
+  deleteDoc,
   startAt,
   endAt,
   where,
@@ -237,6 +238,34 @@ async function ensurePublicAuth() {
   return publicAuthPromise;
 }
 
+function normalizeEmail(value) {
+  const email = String(value || '').trim().toLowerCase();
+  if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw error('Enter a valid email address.', 'invalid-argument');
+  }
+  return email;
+}
+
+async function claimOrganizerInvite(user) {
+  if (!user?.email) return false;
+  const email = normalizeEmail(user.email);
+  const inviteRef = doc(db, 'organizerInvites', email);
+  const invite = await getDoc(inviteRef);
+  if (!invite.exists() || invite.data().active !== true) return false;
+  await setDoc(doc(db, 'organizers', user.uid), {
+    active: true,
+    email,
+    updatedAt: serverTimestamp(),
+    createdAt: serverTimestamp(),
+  }, { merge: true });
+  await setDoc(inviteRef, {
+    active: false,
+    claimedUid: user.uid,
+    claimedAt: serverTimestamp(),
+  }, { merge: true });
+  return true;
+}
+
 async function ensureOrganizer() {
   const user = await authReady();
   if (!user) throw error('Organizer sign-in is required.', 'auth-required');
@@ -257,9 +286,86 @@ async function ensureOrganizer() {
     permit = await getDoc(organizerDoc);
   }
   if (!permit.exists() || permit.data().active !== true) {
+    try {
+      if (await claimOrganizerInvite(user)) return user;
+    } catch (cause) {
+      if (cause?.code !== 'invalid-argument') throw cause;
+    }
     throw error(`The account ${user.email || 'you selected'} is not approved as an organizer.`, 'organizer-not-approved');
   }
   return user;
+}
+
+export async function listOrganizers() {
+  await ensureOrganizer();
+  const snapshots = await getDocs(collection(db, 'organizers'));
+  return snapshots.docs
+    .map((item) => ({
+      uid: item.id,
+      active: item.data().active === true,
+      email: item.data().email || null,
+      updatedAt: timestamp(item.data().updatedAt),
+    }))
+    .sort((a, b) => String(a.email || a.uid).localeCompare(String(b.email || b.uid)));
+}
+
+export async function listOrganizerInvites() {
+  await ensureOrganizer();
+  const snapshots = await getDocs(query(
+    collection(db, 'organizerInvites'),
+    where('active', '==', true),
+  ));
+  return snapshots.docs
+    .map((item) => ({
+      email: item.id,
+      active: item.data().active === true,
+      invitedByEmail: item.data().invitedByEmail || null,
+      createdAt: timestamp(item.data().createdAt),
+    }))
+    .sort((a, b) => a.email.localeCompare(b.email));
+}
+
+export async function inviteOrganizer(emailInput) {
+  const user = await ensureOrganizer();
+  const email = normalizeEmail(emailInput);
+  if (user.email && normalizeEmail(user.email) === email) {
+    throw error('You are already signed in as an organizer.', 'invalid-argument');
+  }
+  const existing = await listOrganizers();
+  if (existing.some((item) => item.active && item.email === email)) {
+    throw error(`${email} is already an organizer.`, 'already-exists');
+  }
+  await setDoc(doc(db, 'organizerInvites', email), {
+    email,
+    active: true,
+    invitedByUid: user.uid,
+    invitedByEmail: user.email ? normalizeEmail(user.email) : null,
+    createdAt: serverTimestamp(),
+    claimedUid: null,
+    claimedAt: null,
+  });
+  return { email };
+}
+
+export async function cancelOrganizerInvite(emailInput) {
+  await ensureOrganizer();
+  const email = normalizeEmail(emailInput);
+  await deleteDoc(doc(db, 'organizerInvites', email));
+  return { email };
+}
+
+export async function revokeOrganizer(uid) {
+  const user = await ensureOrganizer();
+  if (!uid || typeof uid !== 'string') throw error('Choose an organizer to remove.');
+  if (uid === user.uid) throw error('You cannot remove your own organizer access.', 'invalid-argument');
+  const reference = doc(db, 'organizers', uid);
+  const existing = await getDoc(reference);
+  if (!existing.exists()) throw error('That organizer was not found.', 'not-found');
+  await setDoc(reference, {
+    active: false,
+    updatedAt: serverTimestamp(),
+  }, { merge: true });
+  return { uid };
 }
 
 export async function signInOrganizer({ email, password }) {

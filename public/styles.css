@@ -381,6 +381,19 @@ h1, h2, h3, p { margin: 0; }
 .share-box code { display: block; overflow-wrap: anywhere; color: var(--blue); background: var(--blue-pale); border-radius: 8px; padding: 9px 10px; font-size: 11px; }
 .share-box .button { justify-self: start; }
 .settings-panel .button-danger-outline { margin-top: 25px; }
+.organizer-account-email {
+  margin: 0;
+  padding: 14px 15px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-tint);
+  color: var(--navy);
+  font-size: 15px;
+  font-weight: 750;
+  word-break: break-word;
+}
+.organizer-access-list .entry-row { align-items: center; }
+.organizer-access-list .entry-meta { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
 .directory-list { display: grid; gap: 7px; max-height: 334px; overflow: auto; margin-top: 13px; }
 .directory-row { display: flex; align-items: center; gap: 10px; padding: 8px; border: 1px solid var(--line); border-radius: 10px; min-width: 0; }
 .directory-row .person-info { flex: 1; min-width: 0; }
