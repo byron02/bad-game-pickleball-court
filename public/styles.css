@@ -208,7 +208,6 @@ h1, h2, h3, p { margin: 0; }
 .directory-row .person-info { flex: 1; min-width: 0; }
 .directory-row strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .directory-row small { display: block; color: var(--muted); font-size: 10px; text-transform: capitalize; }
-.courts-panel { margin-top: 18px; }
 .court-panel-head { align-items: center; }
 .court-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; }
 .court-grid > .panel-empty { grid-column: 1 / -1; }
