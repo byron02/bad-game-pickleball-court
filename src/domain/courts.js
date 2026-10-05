@@ -173,9 +173,30 @@ function randomUnit(random) {
 }
 
 function priority(player, random) {
-  // The random term breaks near ties, while wait and games played drive access.
-  return nonnegative(player.waitMinutes) - nonnegative(player.gamesPlayed) * 10 +
+  // Fewer games dominate; wait time and a tiny random tie-break follow.
+  return nonnegative(player.waitMinutes) - nonnegative(player.gamesPlayed) * 15 +
     randomUnit(random) * 2;
+}
+
+/** Checked-in players eligible for this court who are not already on a court. */
+export function eligiblePlayersForCourt({ court, players, activeGames = [] }) {
+  const config = validateCourtConfig(court);
+  if (!config.valid) return [];
+  const busy = activePlayerIds(activeGames);
+  const skills = new Set(allowedSkills(court));
+  const division = divisionOf(court);
+  return (Array.isArray(players) ? players : [])
+    .filter((player) => validId(player?.id) && isCheckedIn(player) &&
+      skills.has(skillOf(player.skill)) && !busy.has(player.id) &&
+      (division === 'open' || division === 'mixed' ||
+       genderOf(player.gender) === (division === 'women' ? 'woman' : 'man')));
+}
+
+export function courtPoolSummary({ players, activeGames = [] }) {
+  const roster = Array.isArray(players) ? players : [];
+  const busy = activePlayerIds(activeGames);
+  const waiting = roster.filter((player) => isCheckedIn(player) && !busy.has(player.id)).length;
+  return { waiting, onCourt: busy.size, checkedIn: roster.filter((player) => isCheckedIn(player)).length };
 }
 
 function recentIncludes(player, field, id) {
@@ -241,17 +262,12 @@ export function proposeLineup({ court, players, activeGames = [], random = Math.
   if (typeof random !== 'function') throw new TypeError('random must be a function.');
   if (activeGamesOnly(activeGames).some((game) => game.courtId === court.id)) return null;
 
-  const busy = activePlayerIds(activeGames);
-  const skills = new Set(allowedSkills(court));
   const division = divisionOf(court);
   const size = formatOf(court) === 'singles' ? 2 : 4;
-  const eligible = (Array.isArray(players) ? players : [])
-    .filter((player) => validId(player?.id) && isCheckedIn(player) &&
-      skills.has(skillOf(player.skill)) && !busy.has(player.id) &&
-      (division === 'open' || division === 'mixed' ||
-       genderOf(player.gender) === (division === 'women' ? 'woman' : 'man')))
+  const eligible = eligiblePlayersForCourt({ court, players, activeGames })
     .map((player) => ({ player, score: priority(player, random) }))
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => b.score - a.score ||
+      nonnegative(a.player.gamesPlayed) - nonnegative(b.player.gamesPlayed))
     .map(({ player }) => player);
 
   if (eligible.length < size) return null;

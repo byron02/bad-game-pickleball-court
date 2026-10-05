@@ -36,62 +36,187 @@
     </section>
 
     <div id="dashboard" hidden>
-      <nav class="web-nav" aria-label="Dashboard sections"><a href="#overview" class="current">Today's session</a><a href="#requests">Requests</a><a href="#roster">Players</a><a href="#directory">Directory</a><a href="#courts">Courts</a></nav>
-      <section class="dashboard-head" id="overview">
-        <div><div class="eyebrow">Open play · Organizer dashboard</div><h1>Today's session</h1><p>Approve signups, track who arrived, and share the link with your group chat.</p></div>
-        <div class="head-actions"><button id="refreshButton" class="button button-outline" type="button">Refresh</button><button id="copyLinkButton" class="button button-primary" type="button" disabled>Copy signup link</button></div>
+      <nav class="web-nav" aria-label="Dashboard sections">
+        <a href="#overview" data-view="overview" class="current">Today</a>
+        <a href="#requests" data-view="requests">Requests <span id="navPendingPill" class="count-pill nav-pill" hidden>0</span></a>
+        <a href="#roster" data-view="roster">Players</a>
+        <a href="#directory" data-view="directory">Directory</a>
+        <a href="#courts" data-view="courts">Courts</a>
+      </nav>
+
+      <section class="admin-view" data-view="overview" id="overview">
+        <section class="dashboard-head">
+          <div>
+            <div class="eyebrow">Open play · Organizer dashboard</div>
+            <h1>Today's session</h1>
+            <p>Check capacity, share the signup link, and adjust today's settings.</p>
+          </div>
+          <div class="head-actions">
+            <button id="refreshButton" class="button button-outline" type="button">Refresh</button>
+            <button id="copyLinkButton" class="button button-primary" type="button" disabled>Copy signup link</button>
+          </div>
+        </section>
+
+        <section class="admin-hero" aria-label="Session capacity">
+          <div class="hero-count">
+            <span class="label-overline">Confirmed reservations</span>
+            <div><strong id="adminConfirmed">—</strong><span> / <span id="adminCapacity">—</span></span></div>
+            <p>Confirmed players hold these spots, even before check-in.</p>
+          </div>
+          <div class="hero-progress">
+            <div class="capacity-track" aria-hidden="true"><span id="adminCapacityFill"></span></div>
+            <strong id="adminAvailability">Loading availability…</strong>
+            <p id="adminDateLabel">Today</p>
+          </div>
+        </section>
+
+        <section class="metric-grid" aria-label="Session totals">
+          <article class="metric"><span>Checked in</span><strong id="checkedInMetric">—</strong><small>Here and ready to play</small></article>
+          <article class="metric"><span>Awaiting review</span><strong id="pendingMetric">—</strong><small>Do not hold a spot yet</small></article>
+          <article class="metric"><span>Waitlist</span><strong id="waitlistMetric">—</strong><small>Approved, waiting for a spot</small></article>
+          <article class="metric"><span>Open spots</span><strong id="openMetric">—</strong><small>Before the session is full</small></article>
+        </section>
+
+        <section class="panel settings-panel">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">Session settings</span>
+              <h2>Today's signup</h2>
+              <p>Set the session date and reservation limit.</p>
+            </div>
+          </div>
+          <form id="settingsForm">
+            <label class="field-label" for="sessionDateInput">Session date</label>
+            <input id="sessionDateInput" name="date" class="input" type="date" required>
+            <label class="field-label" for="capacityInput">Player limit</label>
+            <input id="capacityInput" name="capacity" class="input" type="number" min="1" max="512" step="1" required>
+            <button class="button button-primary button-wide" type="submit">Save session</button>
+          </form>
+          <div class="share-box">
+            <span class="label-overline">Share in your GC</span>
+            <code id="shareLinkText">Loading signup link…</code>
+            <button id="copyLinkSecondary" class="button button-outline button-small" type="button" disabled>Copy link</button>
+          </div>
+          <button id="resetButton" class="button button-danger-outline button-wide" type="button">Reset today's signups</button>
+          <p class="field-help">Reset clears the session roster and requests. Player profiles stay in the directory.</p>
+        </section>
       </section>
 
-      <section class="admin-hero" aria-label="Session capacity">
-        <div class="hero-count"><span class="label-overline">Confirmed reservations</span><div><strong id="adminConfirmed">—</strong><span> / <span id="adminCapacity">—</span></span></div><p>Confirmed players hold these spots, even before check-in.</p></div>
-        <div class="hero-progress"><div class="capacity-track" aria-hidden="true"><span id="adminCapacityFill"></span></div><strong id="adminAvailability">Loading availability…</strong><p id="adminDateLabel">Today</p></div>
-      </section>
-
-      <section class="metric-grid" aria-label="Session totals">
-        <article class="metric"><span>Checked in</span><strong id="checkedInMetric">—</strong><small>Here and ready to play</small></article>
-        <article class="metric"><span>Awaiting review</span><strong id="pendingMetric">—</strong><small>Do not hold a spot yet</small></article>
-        <article class="metric"><span>Waitlist</span><strong id="waitlistMetric">—</strong><small>Approved, waiting for a spot</small></article>
-        <article class="metric"><span>Open spots</span><strong id="openMetric">—</strong><small>Before the session is full</small></article>
-      </section>
-
-      <div class="admin-grid">
-        <div class="admin-main-column">
-          <section class="panel" id="requests">
-            <div class="panel-head"><div><span class="eyebrow">Review queue</span><h2>Signup requests <span id="pendingCountLabel" class="count-pill">0</span></h2><p>Approve real players or reject spam and duplicate claims.</p></div></div>
+      <section class="admin-view" data-view="requests" id="requests" hidden>
+        <section class="dashboard-head">
+          <div>
+            <div class="eyebrow">Review queue</div>
+            <h1>Signup requests</h1>
+            <p>Approve new signups on the left. Today's reserved players stay visible on the right.</p>
+          </div>
+        </section>
+        <div class="admin-grid requests-desk">
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <span class="eyebrow">Awaiting review</span>
+                <h2>Signups <span id="pendingCountLabel" class="count-pill">0</span></h2>
+                <p>Set skill level, then approve or reject.</p>
+              </div>
+            </div>
             <div id="pendingList" class="entry-list" aria-live="polite"></div>
           </section>
+          <aside class="panel today-side-panel">
+            <div class="panel-head">
+              <div>
+                <span class="eyebrow">Reserved today</span>
+                <h2>Today's players <span id="todayCountLabel" class="count-pill">0</span></h2>
+                <p id="todaySpotsNote">Open spots and who's already holding a place.</p>
+              </div>
+            </div>
+            <div id="todayPlayersList" class="entry-list today-players-list" aria-live="polite"></div>
+            <div class="list-subhead"><h3>Waitlist</h3><span id="todayWaitlistCountLabel" class="count-pill">0</span></div>
+            <div id="todayWaitlistList" class="entry-list"></div>
+            <button id="gotoPlayersButton" class="button button-outline button-wide" type="button">Open full Players list</button>
+          </aside>
+        </div>
+      </section>
 
-          <section class="panel" id="roster">
-            <div class="panel-head"><div><span class="eyebrow">Daily roster</span><h2>Reserved players</h2><p>Check in arrivals. A confirmed reservation holds its spot until removed or reset.</p></div></div>
-            <div id="confirmedList" class="entry-list" aria-live="polite"></div>
-            <div class="list-subhead"><h3>Waitlist</h3><span id="waitlistCountLabel" class="count-pill">0</span></div>
-            <div id="waitlistList" class="entry-list"></div>
+      <section class="admin-view" data-view="roster" id="roster" hidden>
+        <section class="dashboard-head">
+          <div>
+            <div class="eyebrow">Daily roster</div>
+            <h1>Players</h1>
+            <p>Check in arrivals on the left. Search the full list on the right to fill an open spot.</p>
+          </div>
+        </section>
+        <div class="admin-grid players-desk">
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <span class="eyebrow">Reserved today</span>
+                <h2>Confirmed players</h2>
+                <p>A confirmed reservation holds its spot until removed or reset.</p>
+              </div>
+            </div>
+            <div id="confirmedList" class="entry-list roster-scroll-list" aria-live="polite"></div>
+            <div id="waitlistBlock" class="waitlist-block" hidden>
+              <div class="list-subhead"><h3>Waitlist</h3><span id="waitlistCountLabel" class="count-pill">0</span></div>
+              <div id="waitlistList" class="entry-list"></div>
+            </div>
+          </section>
+          <section class="panel fill-panel">
+            <div class="panel-head">
+              <div>
+                <span class="eyebrow">Main player list</span>
+                <h2>Fill an open spot</h2>
+                <p id="fillSpotsNote">Search players who are not reserved yet. Add them to today, or add and check in when a spot is open.</p>
+              </div>
+            </div>
+            <label class="field-label" for="rosterSearch">Search all players</label>
+            <div class="search-field"><span aria-hidden="true">⌕</span><input id="rosterSearch" type="search" placeholder="Name or skill level" autocomplete="off"></div>
+            <div id="rosterFillList" class="directory-list fill-list" aria-live="polite"></div>
           </section>
         </div>
-
-        <aside class="admin-side-column">
-          <section class="panel settings-panel">
-            <div class="panel-head"><div><span class="eyebrow">Session settings</span><h2>Today's signup</h2><p>Set the session date and reservation limit.</p></div></div>
-            <form id="settingsForm"><label class="field-label" for="sessionDateInput">Session date</label><input id="sessionDateInput" name="date" class="input" type="date" required><label class="field-label" for="capacityInput">Player limit</label><input id="capacityInput" name="capacity" class="input" type="number" min="1" max="512" step="1" required><button class="button button-primary button-wide" type="submit">Save session</button></form>
-            <div class="share-box"><span class="label-overline">Share in your GC</span><code id="shareLinkText">Loading signup link…</code><button id="copyLinkSecondary" class="button button-outline button-small" type="button" disabled>Copy link</button></div>
-            <button id="resetButton" class="button button-danger-outline button-wide" type="button">Reset today's signups</button>
-            <p class="field-help">Reset clears the session roster and requests. Player profiles stay in the directory.</p>
-          </section>
-
-          <section class="panel directory-panel" id="directory">
-            <div class="panel-head"><div><span class="eyebrow">Player database</span><h2>Add a known player</h2><p>Search an approved player and reserve them for today.</p></div></div>
-            <label class="field-label" for="directorySearch">Search players</label>
-            <div class="search-field"><span aria-hidden="true">⌕</span><input id="directorySearch" type="search" placeholder="Name or skill level" autocomplete="off"></div>
-            <div id="directoryList" class="directory-list" aria-live="polite"></div>
-          </section>
-        </aside>
-      </div>
-
-      <section class="panel courts-panel" id="courts">
-        <div class="panel-head court-panel-head"><div><span class="eyebrow">Live play</span><h2>Courts &amp; matches</h2><p>Set each court's format and eligible skill levels, draw checked-in players, then record the winner.</p></div><button id="addCourtButton" class="button button-primary" type="button">+ Add court</button></div>
-        <div id="courtGrid" class="court-grid" aria-live="polite"><p class="panel-empty">Loading courts…</p></div>
-        <div class="history-block"><h3>Recent results</h3><div id="matchHistory" class="match-history" aria-live="polite"><p class="panel-empty">No results recorded yet.</p></div></div>
       </section>
+
+      <section class="admin-view" data-view="directory" id="directory" hidden>
+        <section class="dashboard-head">
+          <div>
+            <div class="eyebrow">Player database</div>
+            <h1>Directory</h1>
+            <p>Search approved players, reserve them, or edit skill and division.</p>
+          </div>
+        </section>
+        <section class="panel directory-panel">
+          <label class="field-label" for="directorySearch">Search players</label>
+          <div class="search-field"><span aria-hidden="true">⌕</span><input id="directorySearch" type="search" placeholder="Name or skill level" autocomplete="off"></div>
+          <div id="directoryList" class="directory-list" aria-live="polite"></div>
+        </section>
+      </section>
+
+      <section class="admin-view" data-view="courts" id="courts" hidden>
+        <section class="dashboard-head">
+          <div>
+            <div class="eyebrow">Live play</div>
+            <h1>Courts</h1>
+            <p>Set formats, draw players, and record winners.</p>
+          </div>
+          <div class="head-actions">
+            <button id="addCourtButton" class="button button-primary" type="button">+ Add court</button>
+          </div>
+        </section>
+        <section class="panel courts-panel">
+          <div id="courtGrid" class="court-grid" aria-live="polite"><p class="panel-empty">Loading courts…</p></div>
+          <div class="history-block">
+            <h3>Recent results</h3>
+            <div id="matchHistory" class="match-history" aria-live="polite"><p class="panel-empty">No results recorded yet.</p></div>
+          </div>
+        </section>
+      </section>
+
+      <nav class="mobile-nav" aria-label="Mobile dashboard sections">
+        <button type="button" data-view="overview" class="current"><span>Today</span></button>
+        <button type="button" data-view="requests"><span>Requests</span><span id="mobilePendingPill" class="mobile-nav-badge" hidden>0</span></button>
+        <button type="button" data-view="roster"><span>Players</span></button>
+        <button type="button" data-view="directory"><span>Directory</span></button>
+        <button type="button" data-view="courts"><span>Courts</span></button>
+      </nav>
     </div>
   </main>
 
