@@ -107,19 +107,34 @@
           <div>
             <div class="eyebrow">Review queue</div>
             <h1>Signup requests</h1>
-            <p>Set each player's skill level, then approve or reject.</p>
+            <p>Approve new signups on the left. Today's reserved players stay visible on the right.</p>
           </div>
         </section>
-        <section class="panel">
-          <div class="panel-head">
-            <div>
-              <span class="eyebrow">Awaiting review</span>
-              <h2>Requests <span id="pendingCountLabel" class="count-pill">0</span></h2>
-              <p>Change skill if the player self-reported the wrong level.</p>
+        <div class="admin-grid requests-desk">
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <span class="eyebrow">Awaiting review</span>
+                <h2>Signups <span id="pendingCountLabel" class="count-pill">0</span></h2>
+                <p>Set skill level, then approve or reject.</p>
+              </div>
             </div>
-          </div>
-          <div id="pendingList" class="entry-list" aria-live="polite"></div>
-        </section>
+            <div id="pendingList" class="entry-list" aria-live="polite"></div>
+          </section>
+          <aside class="panel today-side-panel">
+            <div class="panel-head">
+              <div>
+                <span class="eyebrow">Reserved today</span>
+                <h2>Today's players <span id="todayCountLabel" class="count-pill">0</span></h2>
+                <p id="todaySpotsNote">Open spots and who's already holding a place.</p>
+              </div>
+            </div>
+            <div id="todayPlayersList" class="entry-list today-players-list" aria-live="polite"></div>
+            <div class="list-subhead"><h3>Waitlist</h3><span id="todayWaitlistCountLabel" class="count-pill">0</span></div>
+            <div id="todayWaitlistList" class="entry-list"></div>
+            <button id="gotoPlayersButton" class="button button-outline button-wide" type="button">Open full Players list</button>
+          </aside>
+        </div>
       </section>
 
       <section class="admin-view" data-view="roster" id="roster" hidden>

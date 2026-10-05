@@ -15,6 +15,9 @@ const ui = {
   dateLabel: $('adminDateLabel'), checkedIn: $('checkedInMetric'), pending: $('pendingMetric'), waitlist: $('waitlistMetric'), open: $('openMetric'),
   pendingCount: $('pendingCountLabel'), pendingList: $('pendingList'), confirmedList: $('confirmedList'),
   waitlistCount: $('waitlistCountLabel'), waitlistList: $('waitlistList'),
+  todayCount: $('todayCountLabel'), todaySpotsNote: $('todaySpotsNote'),
+  todayPlayersList: $('todayPlayersList'), todayWaitlistList: $('todayWaitlistList'),
+  todayWaitlistCount: $('todayWaitlistCountLabel'), gotoPlayers: $('gotoPlayersButton'),
   rosterSearch: $('rosterSearch'), rosterFillList: $('rosterFillList'), fillSpotsNote: $('fillSpotsNote'),
   directorySearch: $('directorySearch'), directoryList: $('directoryList'), shareLink: $('shareLinkText'),
   copyLink: $('copyLinkButton'), copyLinkSecondary: $('copyLinkSecondary'), refresh: $('refreshButton'),
@@ -48,6 +51,9 @@ function friendlyError(error) {
   const code = error?.code || '';
   if (code === 'organizer-not-approved') return error.message;
   if (code.includes('permission-denied')) return 'The database denied this action. Refresh the page and try again.';
+  if (code.includes('failed-precondition') || code.includes('aborted')) {
+    return 'Someone else updated the session at the same time. Tap Refresh, then try again.';
+  }
   if (code.includes('wrong-password') || code.includes('invalid-credential')) return 'Email or password was not accepted.';
   if (code.includes('network')) return 'Network error. Check your connection and try again.';
   return error?.message || 'Something went wrong. Please try again.';
@@ -207,6 +213,21 @@ function renderList(container, items, kind, emptyMessage) {
   }
 }
 
+function renderTodaySide(confirmed, waitlist, openSpots) {
+  if (!ui.todayPlayersList) return;
+  if (ui.todayCount) ui.todayCount.textContent = String(confirmed.length);
+  if (ui.todayWaitlistCount) ui.todayWaitlistCount.textContent = String(waitlist.length);
+  if (ui.todaySpotsNote) {
+    ui.todaySpotsNote.textContent = openSpots > 0
+      ? `${openSpots} open ${openSpots === 1 ? 'spot' : 'spots'} · approve a signup or add from Players`
+      : 'Confirmed spots are full · new approvals go to the waitlist';
+  }
+  renderList(ui.todayPlayersList, confirmed, 'confirmed', 'No reserved players yet today.');
+  if (ui.todayWaitlistList) {
+    renderList(ui.todayWaitlistList, waitlist, 'waitlist', 'Waitlist is empty.');
+  }
+}
+
 function rosteredPlayerIds() {
   return new Set(entries.filter((entry) =>
     ['pending', 'confirmed', 'waitlisted'].includes(entry.status)).map((entry) => entry.playerId));
@@ -319,6 +340,7 @@ function renderDashboard(data) {
   renderList(ui.pendingList, pending, 'pending', 'No signup requests to review.');
   renderList(ui.confirmedList, confirmed, 'confirmed', 'No reserved players yet. Share the signup link or add a known player.');
   renderList(ui.waitlistList, waitlist, 'waitlist', 'No players on the waitlist.');
+  renderTodaySide(confirmed, waitlist, open);
   renderFillList();
   renderDirectory();
 
@@ -397,12 +419,13 @@ async function runEntryAction(action, entryId, button) {
   }
 }
 
-for (const list of [ui.pendingList, ui.confirmedList, ui.waitlistList]) {
-  list.addEventListener('click', (event) => {
+for (const list of [ui.pendingList, ui.confirmedList, ui.waitlistList, ui.todayPlayersList, ui.todayWaitlistList]) {
+  list?.addEventListener('click', (event) => {
     const button = event.target.closest('button[data-action]');
     if (button) runEntryAction(button.dataset.action, button.dataset.id, button);
   });
 }
+ui.gotoPlayers?.addEventListener('click', () => showView('roster'));
 ui.directoryList.addEventListener('click', async (event) => {
   const button = event.target.closest('button[data-action]');
   if (!button || !session) return;

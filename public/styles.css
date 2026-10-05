@@ -169,6 +169,10 @@ h1, h2, h3, p { margin: 0; }
 .metric strong { font-size: 29px; line-height: 1.1; margin-top: 7px; letter-spacing: -.04em; }
 .metric small { font-size: 10px; color: var(--muted); margin-top: 2px; }
 .admin-grid { display: grid; grid-template-columns: minmax(0, 1.48fr) minmax(300px, .88fr); align-items: start; gap: 17px; }
+.requests-desk { margin-top: 0; }
+.today-side-panel { position: sticky; top: 12px; }
+.today-side-panel .button-wide { margin-top: 16px; }
+.today-players-list { max-height: min(58vh, 560px); overflow: auto; }
 .admin-main-column, .admin-side-column { display: grid; gap: 17px; }
 .panel { background: white; border: 1px solid var(--line); border-radius: 16px; padding: 22px; box-shadow: 0 5px 18px rgb(16 42 72 / 3%); }
 .directory-panel .directory-list { max-height: none; }
@@ -282,6 +286,8 @@ h1, h2, h3, p { margin: 0; }
   .hero-progress { flex: auto; }
   .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .admin-grid { grid-template-columns: 1fr; }
+  .today-side-panel { position: static; }
+  .today-players-list { max-height: min(40vh, 320px); overflow: auto; }
   .admin-side-column { order: -1; }
   .court-grid { grid-template-columns: 1fr; }
   .admin-main { padding-bottom: 92px; }
