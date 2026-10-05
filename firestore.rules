@@ -63,6 +63,10 @@ service cloud.firestore {
       let before = resource.data;
       let after = request.resource.data;
       let changed = after.diff(before).affectedKeys();
+      let afterSittingOut = after.get('sittingOut', false);
+      let afterPartnerId = after.get('partnerPlayerId', null);
+      let beforePartnerId = before.get('partnerPlayerId', null);
+      let afterPartnerRequest = after.get('partnerRequestToPlayerId', null);
       return anonymousPlayer() &&
         playerControlsEntry(before) &&
         changed.hasOnly([
@@ -74,18 +78,18 @@ service cloud.firestore {
           (
             after.status == 'confirmed' &&
             after.checkedIn is bool &&
-            after.sittingOut is bool &&
-            (after.sittingOut == false || after.checkedIn == true) &&
-            after.playClaimUid == before.playClaimUid &&
-            after.hasPlayPin == before.hasPlayPin &&
+            afterSittingOut is bool &&
+            (afterSittingOut == false || after.checkedIn == true) &&
+            after.get('playClaimUid', null) == before.get('playClaimUid', null) &&
+            after.get('hasPlayPin', false) == before.get('hasPlayPin', false) &&
             (
               !changed.hasAny(['partnerPlayerId', 'partnerRequestToPlayerId']) ||
               (
-                after.partnerPlayerId == before.partnerPlayerId &&
+                afterPartnerId == beforePartnerId &&
                 (
-                  after.partnerRequestToPlayerId == null ||
-                  (after.partnerRequestToPlayerId is string &&
-                    after.partnerRequestToPlayerId != before.playerId)
+                  afterPartnerRequest == null ||
+                  (afterPartnerRequest is string &&
+                    afterPartnerRequest != before.get('playerId', ''))
                 )
               )
             )
@@ -93,9 +97,9 @@ service cloud.firestore {
           (
             after.status == 'checked_out' &&
             after.checkedIn == false &&
-            after.sittingOut == false &&
-            after.partnerPlayerId == null &&
-            after.partnerRequestToPlayerId == null
+            afterSittingOut == false &&
+            afterPartnerId == null &&
+            afterPartnerRequest == null
           )
         );
     }
@@ -129,34 +133,39 @@ service cloud.firestore {
       let before = resource.data;
       let after = request.resource.data;
       let changed = after.diff(before).affectedKeys();
+      let myPlayerId = myPlayClaim(sessionId).playerId;
+      let beforePartnerId = before.get('partnerPlayerId', null);
+      let afterPartnerId = after.get('partnerPlayerId', null);
+      let beforePartnerRequest = before.get('partnerRequestToPlayerId', null);
+      let afterPartnerRequest = after.get('partnerRequestToPlayerId', null);
       return anonymousPlayer() &&
         hasMyPlayClaim(sessionId) &&
-        myPlayClaim(sessionId).playerId is string &&
-        myPlayClaim(sessionId).playerId.size() > 0 &&
+        myPlayerId is string &&
+        myPlayerId.size() > 0 &&
         before.status == 'confirmed' &&
         (
           (
             // Approve or decline an inbound request on the requester's entry.
             entryId != myPlayClaim(sessionId).entryId &&
-            before.partnerRequestToPlayerId == myPlayClaim(sessionId).playerId &&
+            beforePartnerRequest == myPlayerId &&
             (
               (
                 changed.hasOnly(['partnerRequestToPlayerId', 'updatedAt']) &&
-                after.partnerRequestToPlayerId == null
+                afterPartnerRequest == null
               ) ||
               (
                 changed.hasOnly(['partnerRequestToPlayerId', 'partnerPlayerId', 'updatedAt']) &&
-                after.partnerRequestToPlayerId == null &&
-                after.partnerPlayerId == myPlayClaim(sessionId).playerId
+                afterPartnerRequest == null &&
+                afterPartnerId == myPlayerId
               )
             )
           ) ||
           (
             // Clear the other half when either partner unpairs.
             entryId != myPlayClaim(sessionId).entryId &&
-            before.partnerPlayerId == myPlayClaim(sessionId).playerId &&
+            beforePartnerId == myPlayerId &&
             changed.hasOnly(['partnerPlayerId', 'updatedAt']) &&
-            after.partnerPlayerId == null
+            afterPartnerId == null
           ) ||
           (
             // Own claimed entry: send/cancel request, accept mutual lock, or unpair self.
@@ -165,18 +174,18 @@ service cloud.firestore {
             changed.hasOnly(['partnerPlayerId', 'partnerRequestToPlayerId', 'updatedAt']) &&
             (
               (
-                after.partnerPlayerId == before.partnerPlayerId &&
+                afterPartnerId == beforePartnerId &&
                 (
-                  after.partnerRequestToPlayerId == null ||
-                  (after.partnerRequestToPlayerId is string &&
-                    after.partnerRequestToPlayerId != myPlayClaim(sessionId).playerId)
+                  afterPartnerRequest == null ||
+                  (afterPartnerRequest is string &&
+                    afterPartnerRequest != myPlayerId)
                 )
               ) ||
               (
-                after.partnerRequestToPlayerId == null &&
+                afterPartnerRequest == null &&
                 (
-                  after.partnerPlayerId == null ||
-                  after.partnerPlayerId is string
+                  afterPartnerId == null ||
+                  afterPartnerId is string
                 )
               )
             )

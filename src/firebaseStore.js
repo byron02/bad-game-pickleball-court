@@ -750,6 +750,7 @@ export async function approveEntry(sessionId, entryId, options = {}) {
     transaction.update(eRef, {
       playerId: freshPlayer.id, name, status, skillLevel, approvedAt: serverTimestamp(),
       reviewedAt: serverTimestamp(), updatedAt: serverTimestamp(),
+      sittingOut: false, partnerPlayerId: null, partnerRequestToPlayerId: null,
     });
     transaction.update(sRef, {
       confirmedCount: session.data().confirmedCount + (confirmed ? 1 : 0),

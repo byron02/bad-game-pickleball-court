@@ -208,15 +208,14 @@ test('player desk can list open courts and own attendance, but not sit someone e
 test('claimed player can request a doubles partner via playerClaims lookup', { skip: !enabled }, async () => {
   await env.withSecurityRulesDisabled(async (context) => {
     const db = context.firestore();
+    // Intentionally omit sittingOut / partner fields — older confirmed entries often lack them.
     await setDoc(doc(db, 'sessions', sessionId, 'entries', 'player-one'), request('player-one', {
       status: 'confirmed', playerId: 'p1', name: 'Alex', skillLevel: 'beginner',
-      checkedIn: true, sittingOut: false, partnerPlayerId: null, partnerRequestToPlayerId: null,
-      hasPlayPin: true, playClaimUid: 'player-one',
+      checkedIn: true, hasPlayPin: true, playClaimUid: 'player-one',
     }));
     await setDoc(doc(db, 'sessions', sessionId, 'entries', 'player-two'), request('player-two', {
       status: 'confirmed', playerId: 'p2', name: 'Stefanny', skillLevel: 'beginner',
-      checkedIn: true, sittingOut: false, partnerPlayerId: null, partnerRequestToPlayerId: null,
-      hasPlayPin: true, playClaimUid: 'player-two',
+      checkedIn: true, hasPlayPin: true, playClaimUid: 'player-two',
     }));
     await setDoc(doc(db, 'sessions', sessionId, 'playerClaims', 'p1'), {
       entryId: 'player-one', sessionId, updatedAt: new Date(),
