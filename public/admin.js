@@ -39,7 +39,8 @@ function clearAlert() {
 
 function friendlyError(error) {
   const code = error?.code || '';
-  if (code.includes('permission-denied')) return 'This account is not an approved organizer.';
+  if (code === 'organizer-not-approved') return error.message;
+  if (code.includes('permission-denied')) return 'The database denied this action. Refresh the page and try again.';
   if (code.includes('wrong-password') || code.includes('invalid-credential')) return 'Email or password was not accepted.';
   if (code.includes('network')) return 'Network error. Check your connection and try again.';
   return error?.message || 'Something went wrong. Please try again.';

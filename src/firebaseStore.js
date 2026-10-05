@@ -13,6 +13,7 @@ import {
   collection,
   doc,
   getDoc,
+  getDocFromServer,
   getDocs,
   getFirestore,
   connectFirestoreEmulator,
@@ -225,9 +226,11 @@ async function ensureOrganizer() {
   const user = await authReady();
   if (!user) throw error('Organizer sign-in is required.', 'auth-required');
   if (user.isAnonymous) throw error('Organizer sign-in is required.', 'auth-required');
-  const permit = await getDoc(doc(db, 'organizers', user.uid));
+  // An organizer may be approved after their first sign-in. Always check the
+  // server so a previously cached missing document cannot keep denying them.
+  const permit = await getDocFromServer(doc(db, 'organizers', user.uid));
   if (!permit.exists() || permit.data().active !== true) {
-    throw error('This account is not an approved organizer.', 'permission-denied');
+    throw error(`The account ${user.email || 'you selected'} is not approved as an organizer.`, 'organizer-not-approved');
   }
   return user;
 }
