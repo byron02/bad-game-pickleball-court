@@ -51,10 +51,10 @@ service cloud.firestore {
     function playerControlsEntry(before) {
       return before.status == 'confirmed' &&
         (
-          before.playClaimUid == request.auth.uid ||
+          before.get('playClaimUid', '') == request.auth.uid ||
           (
-            before.hasPlayPin != true &&
-            before.ownerUid == request.auth.uid
+            before.get('hasPlayPin', false) != true &&
+            before.get('ownerUid', '') == request.auth.uid
           )
         );
     }
@@ -374,7 +374,7 @@ service cloud.firestore {
         allow create: if anonymousPlayer() &&
           exists(/databases/$(database)/documents/sessions/$(sessionId)/entries/$(entryId)) &&
           get(/databases/$(database)/documents/sessions/$(sessionId)/entries/$(entryId)).data.status == 'confirmed' &&
-          get(/databases/$(database)/documents/sessions/$(sessionId)/entries/$(entryId)).data.hasPlayPin != true &&
+          get(/databases/$(database)/documents/sessions/$(sessionId)/entries/$(entryId)).data.get('hasPlayPin', false) != true &&
           validPlayPin(request.resource.data.pin) &&
           request.resource.data.claimUid == request.auth.uid &&
           request.resource.data.keys().hasOnly(['pin', 'claimUid', 'updatedAt']);
@@ -390,7 +390,7 @@ service cloud.firestore {
               ) ||
               (
                 // Finish a partial create when the entry still has no PIN flag.
-                get(/databases/$(database)/documents/sessions/$(sessionId)/entries/$(entryId)).data.hasPlayPin != true &&
+                get(/databases/$(database)/documents/sessions/$(sessionId)/entries/$(entryId)).data.get('hasPlayPin', false) != true &&
                 request.resource.data.diff(resource.data).affectedKeys()
                   .hasOnly(['pin', 'claimUid', 'updatedAt'])
               )

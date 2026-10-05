@@ -1049,7 +1049,8 @@ export async function setPlayPin(sessionId, entryId, pin) {
     throw error('Only confirmed players can set a desk PIN.');
   }
   if (entrySnap.data().hasPlayPin === true) {
-    throw error('This name already has a PIN. Enter it to unlock, or ask an organizer to clear it.');
+    // Already committed — use unlock instead of create.
+    return unlockPlayPin(sessionId, id, code);
   }
   const playerId = entrySnap.data().playerId || null;
   const existingClaim = await getDoc(playClaimRef(sessionId, user.uid));
@@ -1071,8 +1072,10 @@ export async function setPlayPin(sessionId, entryId, pin) {
       updatedAt: serverTimestamp(),
     });
   } catch (cause) {
-    if (String(cause?.code || '').includes('permission-denied')) {
-      throw error('This name already has a PIN. Enter it to unlock, or ask an organizer to clear it.', 'permission-denied');
+    const codeName = String(cause?.code || '');
+    // Pin doc may already exist from a partial earlier attempt — finish via unlock.
+    if (codeName.includes('permission-denied') || codeName.includes('already-exists')) {
+      return unlockPlayPin(sessionId, id, code);
     }
     throw cause;
   }
@@ -1102,9 +1105,6 @@ export async function unlockPlayPin(sessionId, entryId, pin) {
   if (!entrySnap.exists() || entrySnap.data().status !== 'confirmed') {
     throw error('Only confirmed players can unlock the desk.');
   }
-  if (entrySnap.data().hasPlayPin !== true) {
-    throw error('No PIN is set for this name yet. Create one first.');
-  }
   const playerId = entrySnap.data().playerId || null;
   const existingClaim = await getDoc(playClaimRef(sessionId, user.uid));
   if (existingClaim.exists() && existingClaim.data().entryId && existingClaim.data().entryId !== id) {
@@ -1118,18 +1118,29 @@ export async function unlockPlayPin(sessionId, entryId, pin) {
     }
   }
 
+  const hasPinFlag = entrySnap.data().hasPlayPin === true;
   try {
-    // Prove the PIN by writing it back; rules compare against the stored value.
-    // Players cannot read entryPins, so this must not get() that document.
-    await updateDoc(entryPinRef(sessionId, id), {
-      pin: code,
-      claimUid: user.uid,
-      updatedAt: serverTimestamp(),
-    });
+    if (hasPinFlag) {
+      // Prove the PIN by writing it back; rules compare against the stored value.
+      await updateDoc(entryPinRef(sessionId, id), {
+        pin: code,
+        claimUid: user.uid,
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      // Partial create / repair: pin may or may not exist yet.
+      await setDoc(entryPinRef(sessionId, id), {
+        pin: code,
+        claimUid: user.uid,
+        updatedAt: serverTimestamp(),
+      });
+    }
   } catch (cause) {
     if (String(cause?.code || '').includes('permission-denied') ||
         String(cause?.code || '').includes('not-found')) {
-      throw error('That PIN is incorrect.', 'permission-denied');
+      throw error(hasPinFlag
+        ? 'That PIN is incorrect.'
+        : 'Could not save that PIN. Try again in a moment.', 'permission-denied');
     }
     throw cause;
   }
@@ -1144,7 +1155,7 @@ export async function unlockPlayPin(sessionId, entryId, pin) {
     playClaimUid: user.uid,
     updatedAt: serverTimestamp(),
   });
-  return { unlocked: true, entryId: id };
+  return { unlocked: true, entryId: id, hasPlayPin: true };
 }
 
 /** Organizer: clear a forgotten desk PIN so the player can set a new one. */

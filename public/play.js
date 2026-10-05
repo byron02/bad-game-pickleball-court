@@ -317,12 +317,7 @@ async function submitPin(event) {
     closePinModal();
     showAlert(entry.hasPlayPin ? 'Name unlocked on this phone.' : 'PIN saved. Your name is unlocked on this phone.');
   } catch (error) {
-    const message = String(error?.message || '');
-    if (message.includes('insufficient permissions') || message.includes('permission-denied')) {
-      showPinAlert('Could not save that PIN. Try again, or ask an organizer to clear an existing PIN.');
-    } else {
-      showPinAlert(error.message || 'Could not unlock with that PIN.');
-    }
+    showPinAlert(error.message || 'Could not unlock with that PIN.');
   } finally {
     ui.pinSubmit.textContent = old;
     ui.pinSubmit.disabled = false;
