@@ -415,7 +415,13 @@ service cloud.firestore {
       }
 
       match /playerClaims/{playerId} {
-        allow read, create, update: if organizer();
+        // Players need get (not list) so /play can resolve a partner's entry
+        // when requesting, approving, or clearing a doubles pair.
+        allow get: if organizer() ||
+          (anonymousPlayer() &&
+            get(/databases/$(database)/documents/sessions/$(sessionId)).data.open == true);
+        allow list: if organizer();
+        allow create, update: if organizer();
         allow delete: if organizer() ||
           (anonymousPlayer() && resource.data.entryId == request.auth.uid) ||
           (anonymousPlayer() &&

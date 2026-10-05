@@ -205,6 +205,48 @@ test('player desk can list open courts and own attendance, but not sit someone e
     }));
   });
 
+test('claimed player can request a doubles partner via playerClaims lookup', { skip: !enabled }, async () => {
+  await env.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await setDoc(doc(db, 'sessions', sessionId, 'entries', 'player-one'), request('player-one', {
+      status: 'confirmed', playerId: 'p1', name: 'Alex', skillLevel: 'beginner',
+      checkedIn: true, sittingOut: false, partnerPlayerId: null, partnerRequestToPlayerId: null,
+      hasPlayPin: true, playClaimUid: 'player-one',
+    }));
+    await setDoc(doc(db, 'sessions', sessionId, 'entries', 'player-two'), request('player-two', {
+      status: 'confirmed', playerId: 'p2', name: 'Stefanny', skillLevel: 'beginner',
+      checkedIn: true, sittingOut: false, partnerPlayerId: null, partnerRequestToPlayerId: null,
+      hasPlayPin: true, playClaimUid: 'player-two',
+    }));
+    await setDoc(doc(db, 'sessions', sessionId, 'playerClaims', 'p1'), {
+      entryId: 'player-one', sessionId, updatedAt: new Date(),
+    });
+    await setDoc(doc(db, 'sessions', sessionId, 'playerClaims', 'p2'), {
+      entryId: 'player-two', sessionId, updatedAt: new Date(),
+    });
+    await setDoc(doc(db, 'sessions', sessionId, 'playClaims', 'player-one'), {
+      entryId: 'player-one', playerId: 'p1', updatedAt: new Date(),
+    });
+    await setDoc(doc(db, 'sessions', sessionId, 'entryPins', 'player-one'), {
+      pin: '1234', claimUid: 'player-one', updatedAt: new Date(),
+    });
+    await updateDoc(doc(db, 'sessions', sessionId), { confirmedCount: 2, checkedInCount: 2 });
+  });
+
+  const alex = env.authenticatedContext('player-one', anonymous).firestore();
+  // Partner resolution used by requestPartner must be readable.
+  await assertSucceeds(getDoc(doc(alex, 'sessions', sessionId, 'playerClaims', 'p2')));
+  await assertSucceeds(updateDoc(doc(alex, 'sessions', sessionId, 'entries', 'player-one'), {
+    partnerRequestToPlayerId: 'p2',
+    updatedAt: serverTimestamp(),
+  }));
+  // Cannot write someone else's outbound request.
+  await assertFails(updateDoc(doc(alex, 'sessions', sessionId, 'entries', 'player-two'), {
+    partnerRequestToPlayerId: 'p1',
+    updatedAt: serverTimestamp(),
+  }));
+});
+
 test('closed signup links reject new requests', { skip: !enabled }, async () => {
   await env.withSecurityRulesDisabled(async (context) => {
     await updateDoc(doc(context.firestore(), 'sessions', sessionId), { open: false });
