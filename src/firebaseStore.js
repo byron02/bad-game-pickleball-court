@@ -27,6 +27,7 @@ import {
   startAt,
   endAt,
   where,
+  increment,
 } from 'firebase/firestore';
 import { firebaseConfig } from './firebaseConfig.js';
 
@@ -184,6 +185,7 @@ function normalizedEntry(snapshot, players = new Map()) {
     reviewedAt: timestamp(value.reviewedAt),
     checkedInAt: timestamp(value.checkedInAt),
     checkedOutAt: timestamp(value.checkedOutAt),
+    partnerPlayerId: value.partnerPlayerId || null,
   };
 }
 
@@ -283,6 +285,21 @@ export async function getPublicSession(sessionId) {
   return { session: normalizedSession(snapshot) };
 }
 
+function directoryPayload(player, overrides = {}) {
+  const name = overrides.name || player.name;
+  return {
+    name,
+    nameLower: overrides.nameLower || player.nameLower || String(name || '').toLocaleLowerCase(),
+    skillLevel: overrides.skillLevel || player.skillLevel,
+    division: overrides.division || player.division || 'unspecified',
+    photoData: Object.prototype.hasOwnProperty.call(overrides, 'photoData')
+      ? overrides.photoData
+      : (player.photoData || null),
+    wins: Number(Object.prototype.hasOwnProperty.call(overrides, 'wins') ? overrides.wins : (player.wins || 0)),
+    losses: Number(Object.prototype.hasOwnProperty.call(overrides, 'losses') ? overrides.losses : (player.losses || 0)),
+  };
+}
+
 export async function searchPlayers(text) {
   await ensurePublicAuth();
   const needle = String(text || '').trim().toLocaleLowerCase();
@@ -293,6 +310,22 @@ export async function searchPlayers(text) {
     startAt(needle), endAt(`${needle}\uf8ff`), limit(20),
   ));
   return { players: results.docs.map(normalizedPlayer) };
+}
+
+/** Public lifetime leaderboard from the approved directory. */
+export async function getTopPlayers({ limit: size = 5 } = {}) {
+  await ensurePublicAuth();
+  const capped = Math.min(Math.max(Number(size) || 5, 1), 10);
+  const results = await getDocs(query(
+    collection(db, 'playerDirectory'),
+    orderBy('wins', 'desc'),
+    limit(20),
+  ));
+  const players = results.docs
+    .map(normalizedPlayer)
+    .filter((player) => (player.wins + player.losses) > 0)
+    .slice(0, capped);
+  return { players };
 }
 
 export async function submitSignup({ sessionId, playerId = null, name, skillLevel, division = 'unspecified', photoData = null }) {
@@ -400,7 +433,7 @@ export async function watchAdminDashboard(callback, date = todayManila()) {
   return () => { stopPointer(); stopSession(); stopEntries(); stopPlayers(); };
 }
 
-export async function approveEntry(sessionId, entryId) {
+export async function approveEntry(sessionId, entryId, options = {}) {
   await ensureOrganizer();
   const result = await runTransaction(db, async (transaction) => {
     const sRef = sessionRef(sessionId);
@@ -409,6 +442,16 @@ export async function approveEntry(sessionId, entryId) {
     if (!session.exists() || !session.data().open) throw error('This session is closed.');
     if (!entry.exists() || entry.data().status !== 'pending') throw error('This request is no longer pending.');
     const request = entry.data();
+    const skillLevel = validSkill(
+      Object.prototype.hasOwnProperty.call(options, 'skillLevel')
+        ? options.skillLevel
+        : request.skillLevel,
+    );
+    const name = validName(
+      Object.prototype.hasOwnProperty.call(options, 'name')
+        ? options.name
+        : request.name,
+    );
     const existingPlayer = request.playerId ? playerRef(request.playerId) : null;
     const freshPlayer = existingPlayer || doc(collection(db, 'players'));
     const player = existingPlayer ? await transaction.get(existingPlayer) : null;
@@ -421,33 +464,31 @@ export async function approveEntry(sessionId, entryId) {
     const confirmed = session.data().confirmedCount < session.data().capacity;
     const status = confirmed ? 'confirmed' : 'waitlisted';
     if (!existingPlayer) {
-      const name = validName(request.name);
       const profile = {
-        name, nameLower: name.toLocaleLowerCase(), skillLevel: validSkill(request.skillLevel),
+        name, nameLower: name.toLocaleLowerCase(), skillLevel,
         division: validDivision(request.division),
         photoData: validPhoto(request.photoData), active: true, wins: 0, losses: 0,
         createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
       };
       transaction.set(freshPlayer, profile);
-      transaction.set(directoryRef(freshPlayer.id), {
-        name: profile.name, nameLower: profile.nameLower,
-        skillLevel: profile.skillLevel, division: profile.division,
-        photoData: profile.photoData,
-      });
-    } else if (request.photoData) {
-      const photoData = validPhoto(request.photoData);
-      transaction.update(existingPlayer, { photoData, updatedAt: serverTimestamp() });
-      transaction.set(directoryRef(freshPlayer.id), {
-        name: player.data().name,
-        nameLower: player.data().nameLower || player.data().name.toLocaleLowerCase(),
-        skillLevel: player.data().skillLevel,
-        division: player.data().division || 'unspecified',
-        photoData,
-      }, { merge: true });
+      transaction.set(directoryRef(freshPlayer.id), directoryPayload(profile));
+    } else {
+      const photoData = request.photoData ? validPhoto(request.photoData) : player.data().photoData || null;
+      const playerPatch = {
+        name,
+        nameLower: name.toLocaleLowerCase(),
+        skillLevel,
+        updatedAt: serverTimestamp(),
+      };
+      if (request.photoData) playerPatch.photoData = photoData;
+      transaction.update(existingPlayer, playerPatch);
+      transaction.set(directoryRef(freshPlayer.id), directoryPayload(player.data(), {
+        name, nameLower: name.toLocaleLowerCase(), skillLevel, photoData,
+      }), { merge: true });
     }
     transaction.set(claim, { entryId, createdAt: serverTimestamp() });
     transaction.update(eRef, {
-      playerId: freshPlayer.id, status, approvedAt: serverTimestamp(),
+      playerId: freshPlayer.id, name, status, skillLevel, approvedAt: serverTimestamp(),
       reviewedAt: serverTimestamp(), updatedAt: serverTimestamp(),
     });
     transaction.update(sRef, {
@@ -455,7 +496,7 @@ export async function approveEntry(sessionId, entryId) {
       waitlistCount: (session.data().waitlistCount || 0) + (confirmed ? 0 : 1),
       updatedAt: serverTimestamp(),
     });
-    return { status, playerId: freshPlayer.id };
+    return { status, playerId: freshPlayer.id, skillLevel, name };
   });
   return result;
 }
@@ -513,17 +554,35 @@ async function closeEntry(sessionId, entryId, status) {
     const lock = prior.playerId && wasConfirmed ? await transaction.get(playerLockRef(sessionId, prior.playerId)) : null;
     if (lock?.exists()) throw error('Replace or finish this player\'s game first.');
     const existingClaim = claim ? await transaction.get(claim) : null;
+    let partnerEntry = null;
+    if (prior.partnerPlayerId) {
+      const partnerClaim = await transaction.get(claimRef(sessionId, prior.partnerPlayerId));
+      if (partnerClaim.exists()) {
+        partnerEntry = await transaction.get(entryRef(sessionId, partnerClaim.data().entryId));
+      }
+    }
     transaction.update(eRef, {
-      status, checkedIn: false, checkedOutAt: status === 'checked_out' ? serverTimestamp() : prior.checkedOutAt || null,
-      reviewedAt: serverTimestamp(), updatedAt: serverTimestamp(),
+      status,
+      checkedIn: false,
+      checkedOutAt: status === 'checked_out' ? serverTimestamp() : prior.checkedOutAt || null,
+      reviewedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      partnerPlayerId: null,
     });
     if (existingClaim?.exists() && existingClaim.data().entryId === entryId) transaction.delete(claim);
-    transaction.update(sRef, {
+    if (partnerEntry?.exists() && partnerEntry.data().partnerPlayerId === prior.playerId) {
+      transaction.update(partnerEntry.ref, {
+        partnerPlayerId: null,
+        updatedAt: serverTimestamp(),
+      });
+    }
+    const sessionPatch = {
       confirmedCount: session.data().confirmedCount - (wasConfirmed ? 1 : 0),
-      checkedInCount: (session.data().checkedInCount || 0) - (wasConfirmed && prior.checkedIn ? 1 : 0),
       waitlistCount: (session.data().waitlistCount || 0) - (wasWaitlisted ? 1 : 0),
       updatedAt: serverTimestamp(),
-    });
+    };
+    if (wasConfirmed && prior.checkedIn) sessionPatch.checkedInCount = increment(-1);
+    transaction.update(sRef, sessionPatch);
     return wasConfirmed;
   });
   if (freed) await promoteOldest(sessionId);
@@ -534,9 +593,99 @@ export async function rejectEntry(sessionId, entryId) { return closeEntry(sessio
 export async function removeEntry(sessionId, entryId) { return closeEntry(sessionId, entryId, 'removed'); }
 export async function checkOutEntry(sessionId, entryId) { return closeEntry(sessionId, entryId, 'checked_out'); }
 
+/** Lock two confirmed players as a doubles pair for today's draws, or clear the lock. */
+export async function setEntryPartner(sessionId, entryId, partnerPlayerId = null) {
+  await ensureOrganizer();
+  const partnerId = partnerPlayerId ? idOfPlayer(partnerPlayerId) : null;
+  await runTransaction(db, async (transaction) => {
+    const eRef = entryRef(sessionId, entryId);
+    const entry = await transaction.get(eRef);
+    if (!entry.exists() || entry.data().status !== 'confirmed') {
+      throw error('Only confirmed players can be paired.');
+    }
+    const prior = entry.data();
+    if (!prior.playerId) throw error('Pair players who have a saved profile.');
+
+    const previousPartnerId = prior.partnerPlayerId || null;
+    let previousPartnerEntry = null;
+    if (previousPartnerId) {
+      const previousClaim = await transaction.get(claimRef(sessionId, previousPartnerId));
+      if (previousClaim.exists()) {
+        previousPartnerEntry = await transaction.get(entryRef(sessionId, previousClaim.data().entryId));
+      }
+    }
+
+    let nextPartnerEntry = null;
+    let nextPartnerPrevious = null;
+    if (partnerId) {
+      if (partnerId === prior.playerId) throw error('A player cannot pair with themselves.');
+      const partnerClaim = await transaction.get(claimRef(sessionId, partnerId));
+      if (!partnerClaim.exists()) throw error('Partner is not on today’s roster.');
+      nextPartnerEntry = await transaction.get(entryRef(sessionId, partnerClaim.data().entryId));
+      if (!nextPartnerEntry.exists() || nextPartnerEntry.data().status !== 'confirmed') {
+        throw error('Partner must also be confirmed for today.');
+      }
+      const nextPriorPartnerId = nextPartnerEntry.data().partnerPlayerId || null;
+      if (nextPriorPartnerId && nextPriorPartnerId !== prior.playerId) {
+        const otherClaim = await transaction.get(claimRef(sessionId, nextPriorPartnerId));
+        if (otherClaim.exists()) {
+          nextPartnerPrevious = await transaction.get(entryRef(sessionId, otherClaim.data().entryId));
+        }
+      }
+    }
+
+    if (previousPartnerEntry?.exists() && previousPartnerEntry.data().partnerPlayerId === prior.playerId) {
+      transaction.update(previousPartnerEntry.ref, {
+        partnerPlayerId: null,
+        updatedAt: serverTimestamp(),
+      });
+    }
+    if (nextPartnerPrevious?.exists() &&
+        nextPartnerPrevious.data().partnerPlayerId === partnerId) {
+      transaction.update(nextPartnerPrevious.ref, {
+        partnerPlayerId: null,
+        updatedAt: serverTimestamp(),
+      });
+    }
+    transaction.update(eRef, {
+      partnerPlayerId: partnerId,
+      updatedAt: serverTimestamp(),
+    });
+    if (nextPartnerEntry) {
+      transaction.update(nextPartnerEntry.ref, {
+        partnerPlayerId: prior.playerId,
+        updatedAt: serverTimestamp(),
+      });
+    }
+  });
+  return { partnerPlayerId: partnerId };
+}
+
+function idOfPlayer(value) {
+  if (typeof value !== 'string' || !value.trim() || value.includes('/')) {
+    throw error('Player id is invalid.');
+  }
+  return value.trim();
+}
+
+async function withContentionRetries(work) {
+  let lastError;
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    try {
+      return await work();
+    } catch (cause) {
+      lastError = cause;
+      const code = String(cause?.code || '');
+      if (!code.includes('failed-precondition') && !code.includes('aborted')) throw cause;
+      await new Promise((resolve) => setTimeout(resolve, 35 * (attempt + 1)));
+    }
+  }
+  throw lastError || error('The session changed while saving. Tap Refresh and try again.', 'aborted');
+}
+
 export async function checkInEntry(sessionId, entryId) {
   await ensureOrganizer();
-  await runTransaction(db, async (transaction) => {
+  await withContentionRetries(() => runTransaction(db, async (transaction) => {
     const sRef = sessionRef(sessionId);
     const eRef = entryRef(sessionId, entryId);
     const [session, entry] = await Promise.all([transaction.get(sRef), transaction.get(eRef)]);
@@ -544,17 +693,19 @@ export async function checkInEntry(sessionId, entryId) {
     if (!entry.exists() || entry.data().status !== 'confirmed') throw error('Only confirmed players can check in.');
     if (entry.data().checkedIn) return;
     transaction.update(eRef, { checkedIn: true, checkedInAt: serverTimestamp(), updatedAt: serverTimestamp() });
+    // Use increment so concurrent check-ins do not collide on checkedInCount.
     transaction.update(sRef, {
-      checkedInCount: (session.data().checkedInCount || 0) + 1, updatedAt: serverTimestamp(),
+      checkedInCount: increment(1), updatedAt: serverTimestamp(),
     });
-  });
+  }));
   return { checkedIn: true };
 }
 
-export async function reservePlayer(sessionId, playerId) {
+export async function reservePlayer(sessionId, playerId, options = {}) {
   await ensureOrganizer();
+  const checkIn = options.checkIn === true;
   const id = doc(collection(db, 'sessions', sessionId, 'entries')).id;
-  const result = await runTransaction(db, async (transaction) => {
+  const result = await withContentionRetries(() => runTransaction(db, async (transaction) => {
     const sRef = sessionRef(sessionId);
     const pRef = playerRef(playerId);
     const claim = claimRef(sessionId, playerId);
@@ -564,32 +715,123 @@ export async function reservePlayer(sessionId, playerId) {
     if (!session.exists() || !session.data().open) throw error('This session is closed.');
     if (!player.exists() || player.data().active !== true) throw error('Player not found.');
     if (existingClaim.exists()) throw error('This player already has a reservation or waitlist place.', 'already-exists');
-    const confirmed = session.data().confirmedCount < session.data().capacity;
-    const status = confirmed ? 'confirmed' : 'waitlisted';
+    const hasOpenSpot = session.data().confirmedCount < session.data().capacity;
+    if (checkIn && !hasOpenSpot) {
+      throw error('No open confirmed spots left. Reserve to the waitlist instead.');
+    }
+    const status = hasOpenSpot ? 'confirmed' : 'waitlisted';
+    const shouldCheckIn = checkIn && status === 'confirmed';
     transaction.set(entryRef(sessionId, id), {
       sessionId, ownerUid: null, playerId,
       name: player.data().name, skillLevel: player.data().skillLevel,
       division: player.data().division || 'unspecified',
       photoData: player.data().photoData || null,
-      status, checkedIn: false, source: 'organizer',
+      status, checkedIn: shouldCheckIn, source: 'organizer',
       createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
       approvedAt: serverTimestamp(), reviewedAt: serverTimestamp(),
-      checkedInAt: null, checkedOutAt: null,
+      checkedInAt: shouldCheckIn ? serverTimestamp() : null, checkedOutAt: null,
     });
     transaction.set(claim, { entryId: id, createdAt: serverTimestamp() });
-    transaction.update(sRef, {
-      confirmedCount: session.data().confirmedCount + (confirmed ? 1 : 0),
-      waitlistCount: (session.data().waitlistCount || 0) + (confirmed ? 0 : 1),
-      updatedAt: serverTimestamp(),
-    });
-    return { id, status };
-  });
+    const sessionPatch = { updatedAt: serverTimestamp() };
+    if (status === 'confirmed') sessionPatch.confirmedCount = increment(1);
+    else sessionPatch.waitlistCount = increment(1);
+    if (shouldCheckIn) sessionPatch.checkedInCount = increment(1);
+    transaction.update(sRef, sessionPatch);
+    return { id, status, checkedIn: shouldCheckIn };
+  }));
   return { entry: result };
+}
+
+/** Create a new directory player and optionally put them on today's roster. */
+export async function createAndReservePlayer(sessionId, {
+  name,
+  skillLevel,
+  division = 'unspecified',
+  reserve = true,
+  checkIn = false,
+} = {}) {
+  await ensureOrganizer();
+  const playerName = validName(name);
+  const skill = validSkill(skillLevel);
+  const gender = validDivision(division);
+  const playerDoc = doc(collection(db, 'players'));
+  const entryId = doc(collection(db, 'sessions', sessionId, 'entries')).id;
+
+  const result = await withContentionRetries(() => runTransaction(db, async (transaction) => {
+    const sRef = sessionRef(sessionId);
+    const session = await transaction.get(sRef);
+    if (!session.exists() || session.data().open !== true) throw error('This session is closed.');
+
+    const profile = {
+      name: playerName,
+      nameLower: playerName.toLocaleLowerCase(),
+      skillLevel: skill,
+      division: gender,
+      photoData: null,
+      active: true,
+      wins: 0,
+      losses: 0,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      source: 'organizer',
+    };
+    transaction.set(playerDoc, profile);
+    transaction.set(directoryRef(playerDoc.id), directoryPayload(profile));
+
+    if (!reserve) {
+      return { playerId: playerDoc.id, entry: null };
+    }
+
+    const hasOpenSpot = session.data().confirmedCount < session.data().capacity;
+    if (checkIn && !hasOpenSpot) {
+      throw error('No open confirmed spots left. Reserve to the waitlist instead.');
+    }
+    const status = hasOpenSpot ? 'confirmed' : 'waitlisted';
+    const shouldCheckIn = checkIn && status === 'confirmed';
+    transaction.set(entryRef(sessionId, entryId), {
+      sessionId,
+      ownerUid: null,
+      playerId: playerDoc.id,
+      name: playerName,
+      skillLevel: skill,
+      division: gender,
+      photoData: null,
+      status,
+      checkedIn: shouldCheckIn,
+      source: 'organizer',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      approvedAt: serverTimestamp(),
+      reviewedAt: serverTimestamp(),
+      checkedInAt: shouldCheckIn ? serverTimestamp() : null,
+      checkedOutAt: null,
+    });
+    transaction.set(claimRef(sessionId, playerDoc.id), {
+      entryId,
+      createdAt: serverTimestamp(),
+    });
+    const sessionPatch = { updatedAt: serverTimestamp() };
+    if (status === 'confirmed') sessionPatch.confirmedCount = increment(1);
+    else sessionPatch.waitlistCount = increment(1);
+    if (shouldCheckIn) sessionPatch.checkedInCount = increment(1);
+    transaction.update(sRef, sessionPatch);
+    return {
+      playerId: playerDoc.id,
+      entry: { id: entryId, status, checkedIn: shouldCheckIn },
+    };
+  }));
+
+  return result;
 }
 
 export async function updatePlayer(playerId, changes, sessionId = null) {
   await ensureOrganizer();
   const patch = { updatedAt: serverTimestamp() };
+  if (Object.prototype.hasOwnProperty.call(changes, 'name')) {
+    const name = validName(changes.name);
+    patch.name = name;
+    patch.nameLower = name.toLocaleLowerCase();
+  }
   if (Object.prototype.hasOwnProperty.call(changes, 'skillLevel')) {
     patch.skillLevel = validSkill(changes.skillLevel);
   }
@@ -607,17 +849,15 @@ export async function updatePlayer(playerId, changes, sessionId = null) {
       if (claim.exists()) entry = await transaction.get(entryRef(sessionId, claim.data().entryId));
     }
     transaction.update(reference, patch);
-    transaction.set(directoryRef(playerId), {
-      name: player.data().name,
-      nameLower: player.data().nameLower || player.data().name.toLocaleLowerCase(),
-      skillLevel: patch.skillLevel || player.data().skillLevel,
-      division: patch.division || player.data().division || 'unspecified',
-      photoData: player.data().photoData || null,
-    }, { merge: true });
+    transaction.set(directoryRef(playerId), directoryPayload(player.data(), patch), { merge: true });
     // Court eligibility is read from the active session entry. Keep that
     // snapshot aligned with an organizer's profile edit for this session.
     if (entry?.exists() && ['confirmed', 'waitlisted'].includes(entry.data().status)) {
-      transaction.update(entry.ref, patch);
+      const entryPatch = { updatedAt: serverTimestamp() };
+      if (patch.name) entryPatch.name = patch.name;
+      if (patch.skillLevel) entryPatch.skillLevel = patch.skillLevel;
+      if (patch.division) entryPatch.division = patch.division;
+      transaction.update(entry.ref, entryPatch);
     }
   });
   const player = await getDoc(reference);
