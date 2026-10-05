@@ -26,12 +26,17 @@ const ui = {
   selectedName: $('selectedName'),
   selectedMeta: $('selectedMeta'),
   selectedNote: $('selectedNote'),
-  pinPanel: $('pinPanel'),
+  pinDialog: $('pinDialog'),
+  pinForm: $('pinForm'),
+  pinAvatar: $('pinAvatar'),
+  pinPlayerName: $('pinPlayerName'),
   pinTitle: $('pinTitle'),
   pinHelp: $('pinHelp'),
+  pinAlert: $('pinAlert'),
   pinInput: $('pinInput'),
   pinConfirm: $('pinConfirmInput'),
   pinConfirmLabel: $('pinConfirmLabel'),
+  pinCancel: $('pinCancelButton'),
   pinSubmit: $('pinSubmitButton'),
   selectedActions: $('selectedActions'),
   checkIn: $('checkInButton'),
@@ -213,34 +218,105 @@ function renderResults() {
   }
 }
 
-function renderPinPanel(entry) {
-  if (!entry) {
-    ui.pinPanel.hidden = true;
-    return false;
-  }
-  if (controlsEntry(entry)) {
-    ui.pinPanel.hidden = true;
-    return true;
-  }
-  ui.pinPanel.hidden = false;
+function showPinAlert(message) {
+  ui.pinAlert.textContent = message;
+  ui.pinAlert.hidden = false;
+}
+
+function clearPinAlert() {
+  ui.pinAlert.hidden = true;
+  ui.pinAlert.textContent = '';
+}
+
+function openPinModal(entry) {
+  if (!entry || !ui.pinDialog) return;
+  clearPinAlert();
+  ui.pinAvatar.textContent = initials(entry.name);
+  ui.pinPlayerName.textContent = entry.name || 'Player';
   ui.pinInput.value = '';
   ui.pinConfirm.value = '';
   if (entry.hasPlayPin) {
     ui.pinTitle.textContent = 'Enter your 4-digit PIN';
-    ui.pinHelp.textContent = 'This unlocks check-in, sit out, and pairing on this phone. Forgot it? Ask an organizer to clear your PIN.';
+    ui.pinHelp.textContent = 'Unlock check-in, sit out, and pairing on this phone. Forgot it? Ask an organizer to clear your PIN.';
     ui.pinConfirmLabel.hidden = true;
     ui.pinConfirm.hidden = true;
     ui.pinConfirm.required = false;
-    ui.pinSubmit.textContent = 'Unlock my name';
+    ui.pinSubmit.textContent = 'Unlock';
   } else {
     ui.pinTitle.textContent = 'Create a 4-digit PIN';
-    ui.pinHelp.textContent = 'Pin this name so only you can manage it from any phone. You’ll enter this PIN next time you search yourself.';
+    ui.pinHelp.textContent = 'Pin this name so only you can manage it from any phone. You’ll enter this PIN next time.';
     ui.pinConfirmLabel.hidden = false;
     ui.pinConfirm.hidden = false;
     ui.pinConfirm.required = true;
-    ui.pinSubmit.textContent = 'Save PIN & unlock';
+    ui.pinSubmit.textContent = 'Save PIN';
   }
-  return false;
+  if (!ui.pinDialog.open) ui.pinDialog.showModal();
+  queueMicrotask(() => ui.pinInput.focus());
+}
+
+function closePinModal() {
+  if (ui.pinDialog?.open) ui.pinDialog.close();
+  clearPinAlert();
+}
+
+function selectEntry(entryId, { openPin = true } = {}) {
+  selectedId = entryId;
+  const entry = roster.find((item) => item.id === entryId);
+  renderResults();
+  if (!entry) {
+    ui.selected.hidden = true;
+    closePinModal();
+    return;
+  }
+
+  const unlocked = controlsEntry(entry);
+  if (!unlocked) {
+    ui.selected.hidden = true;
+    ui.selectedActions.hidden = true;
+    ui.pairPanel.hidden = true;
+    if (openPin) openPinModal(entry);
+    return;
+  }
+
+  closePinModal();
+  ui.selected.hidden = false;
+  ui.selectedAvatar.textContent = initials(entry.name);
+  ui.selectedName.textContent = entry.name || 'Player';
+  ui.selectedMeta.textContent = statusLabel(entry);
+  ui.selectedNote.textContent = 'This name is unlocked on this phone. Sit out, check in, leave, or pair from here.';
+  ui.selectedActions.hidden = false;
+  ui.checkIn.hidden = entry.checkedIn && !entry.sittingOut;
+  ui.sitOut.hidden = !entry.checkedIn || entry.sittingOut;
+  ui.resume.hidden = !entry.sittingOut;
+  ui.leave.hidden = false;
+  ui.checkIn.textContent = entry.sittingOut ? 'Check in & resume' : 'Check in';
+  renderPairPanel(entry);
+}
+
+async function submitPin(event) {
+  event?.preventDefault?.();
+  const entry = roster.find((item) => item.id === selectedId);
+  if (!session || !entry) return showPinAlert('Select your name first.');
+  clearPinAlert();
+  const pin = ui.pinInput.value.trim();
+  if (!/^\d{4}$/.test(pin)) return showPinAlert('Enter a 4-digit PIN.');
+  if (!entry.hasPlayPin) {
+    const confirmPin = ui.pinConfirm.value.trim();
+    if (pin !== confirmPin) return showPinAlert('PIN confirmation does not match.');
+  }
+  const old = ui.pinSubmit.textContent;
+  ui.pinSubmit.disabled = true;
+  try {
+    if (entry.hasPlayPin) await unlockPlayPin(session.id, entry.id, pin);
+    else await setPlayPin(session.id, entry.id, pin);
+    closePinModal();
+    showAlert(entry.hasPlayPin ? 'Name unlocked on this phone.' : 'PIN saved. Your name is unlocked on this phone.');
+  } catch (error) {
+    showPinAlert(error.message || 'Could not unlock with that PIN.');
+  } finally {
+    ui.pinSubmit.textContent = old;
+    ui.pinSubmit.disabled = false;
+  }
 }
 
 function renderPairPanel(entry) {
@@ -320,35 +396,6 @@ function renderPairPanel(entry) {
   }
 }
 
-function selectEntry(entryId) {
-  selectedId = entryId;
-  const entry = roster.find((item) => item.id === entryId);
-  renderResults();
-  if (!entry) {
-    ui.selected.hidden = true;
-    return;
-  }
-  ui.selected.hidden = false;
-  ui.selectedAvatar.textContent = initials(entry.name);
-  ui.selectedName.textContent = entry.name || 'Player';
-  ui.selectedMeta.textContent = statusLabel(entry);
-  const unlocked = renderPinPanel(entry);
-  ui.selectedActions.hidden = !unlocked;
-  ui.selectedNote.textContent = unlocked
-    ? 'This name is unlocked on this phone. Sit out, check in, leave, or pair from here.'
-    : (entry.hasPlayPin
-      ? 'Enter the PIN for this name to manage attendance. Other players cannot change it.'
-      : 'Create a PIN to claim this name on the player desk. Organizers can clear a forgotten PIN.');
-  if (unlocked) {
-    ui.checkIn.hidden = entry.checkedIn && !entry.sittingOut;
-    ui.sitOut.hidden = !entry.checkedIn || entry.sittingOut;
-    ui.resume.hidden = !entry.sittingOut;
-    ui.leave.hidden = false;
-    ui.checkIn.textContent = entry.sittingOut ? 'Check in & resume' : 'Check in';
-  }
-  renderPairPanel(entry);
-}
-
 async function runAction(action, button) {
   const entry = roster.find((item) => item.id === selectedId);
   if (!session || !entry || !controlsEntry(entry)) {
@@ -398,38 +445,14 @@ async function runPairAction(action, target, button) {
   }
 }
 
-async function submitPin() {
-  const entry = roster.find((item) => item.id === selectedId);
-  if (!session || !entry) return showAlert('Select your name first.');
-  clearAlert();
-  const pin = ui.pinInput.value.trim();
-  if (!/^\d{4}$/.test(pin)) return showAlert('Enter a 4-digit PIN.');
-  if (!entry.hasPlayPin) {
-    const confirmPin = ui.pinConfirm.value.trim();
-    if (pin !== confirmPin) return showAlert('PIN confirmation does not match.');
-  }
-  const old = ui.pinSubmit.textContent;
-  ui.pinSubmit.disabled = true;
-  try {
-    if (entry.hasPlayPin) await unlockPlayPin(session.id, entry.id, pin);
-    else await setPlayPin(session.id, entry.id, pin);
-    showAlert(entry.hasPlayPin ? 'Name unlocked on this phone.' : 'PIN saved. Your name is unlocked on this phone.');
-  } catch (error) {
-    showAlert(error.message || 'Could not unlock with that PIN.');
-  } finally {
-    ui.pinSubmit.textContent = old;
-    ui.pinSubmit.disabled = false;
-  }
-}
-
 function refreshAll() {
   renderResults();
   renderInbound();
   renderBoard();
-  if (selectedId) selectEntry(selectedId);
+  if (selectedId) selectEntry(selectedId, { openPin: false });
   else {
     const mine = myEntry();
-    if (mine) selectEntry(mine.id);
+    if (mine) selectEntry(mine.id, { openPin: false });
   }
 }
 
@@ -438,7 +461,16 @@ ui.pairSearch.addEventListener('input', () => {
   const mine = myEntry();
   if (mine && selectedId === mine.id) renderPairPanel(mine);
 });
-ui.pinSubmit.addEventListener('click', submitPin);
+ui.pinForm?.addEventListener('submit', submitPin);
+ui.pinCancel?.addEventListener('click', () => {
+  closePinModal();
+  selectedId = null;
+  renderResults();
+});
+ui.pinDialog?.addEventListener('cancel', () => {
+  selectedId = null;
+  renderResults();
+});
 ui.checkIn.addEventListener('click', (event) => runAction('check-in', event.currentTarget));
 ui.sitOut.addEventListener('click', (event) => runAction('sit-out', event.currentTarget));
 ui.resume.addEventListener('click', (event) => runAction('resume', event.currentTarget));

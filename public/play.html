@@ -27,7 +27,7 @@
     <section class="intro-panel play-intro">
       <div class="eyebrow">Your attendance</div>
       <h1>Find your name. Manage your status.</h1>
-      <p class="intro-copy">Search your name, set or enter your 4-digit PIN, then check in, sit out, leave, or pair. Other phones cannot change your status without the PIN. Organizers can clear a forgotten PIN.</p>
+      <p class="intro-copy">Search your name, enter your PIN in the popup, then check in, sit out, leave, or pair. Organizers can clear a forgotten PIN.</p>
     </section>
 
     <section id="missingLinkPanel" class="signup-card" hidden>
@@ -71,16 +71,6 @@
         </div>
         <p id="selectedNote" class="field-help"></p>
 
-        <div id="pinPanel" class="play-pin" hidden>
-          <strong id="pinTitle">Create a 4-digit PIN</strong>
-          <p id="pinHelp" class="field-help"></p>
-          <label class="field-label" for="pinInput">PIN</label>
-          <input id="pinInput" class="input" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="off" placeholder="••••">
-          <label id="pinConfirmLabel" class="field-label" for="pinConfirmInput">Confirm PIN</label>
-          <input id="pinConfirmInput" class="input" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="off" placeholder="••••">
-          <button id="pinSubmitButton" class="button button-primary button-wide" type="button">Save PIN & unlock</button>
-        </div>
-
         <div id="selectedActions" class="play-actions" hidden>
           <button id="checkInButton" class="button button-primary button-wide" type="button">Check in</button>
           <button id="sitOutButton" class="button button-outline button-wide" type="button">Sit out</button>
@@ -102,6 +92,29 @@
       </div>
     </section>
   </main>
+
+  <dialog id="pinDialog" class="confirm-dialog play-pin-dialog" aria-labelledby="pinTitle">
+    <form id="pinForm" method="dialog">
+      <div class="play-pin-dialog-head">
+        <span id="pinAvatar" class="avatar">?</span>
+        <div>
+          <span class="label-overline">Player desk</span>
+          <h2 id="pinPlayerName">Player</h2>
+        </div>
+      </div>
+      <strong id="pinTitle">Enter your 4-digit PIN</strong>
+      <p id="pinHelp" class="field-help"></p>
+      <div id="pinAlert" class="alert" role="alert" hidden></div>
+      <label class="field-label" for="pinInput">PIN</label>
+      <input id="pinInput" class="input" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="one-time-code" placeholder="••••" required>
+      <label id="pinConfirmLabel" class="field-label" for="pinConfirmInput">Confirm PIN</label>
+      <input id="pinConfirmInput" class="input" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="off" placeholder="••••">
+      <div class="dialog-actions">
+        <button id="pinCancelButton" class="button button-outline" type="button">Cancel</button>
+        <button id="pinSubmitButton" class="button button-primary" type="submit">Unlock</button>
+      </div>
+    </form>
+  </dialog>
 
   <footer class="site-footer shell">
     <span>Bad Game Pickleball Courts</span>
