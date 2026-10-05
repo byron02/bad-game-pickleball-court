@@ -511,11 +511,15 @@ h1, h2, h3, p { margin: 0; }
 
 @media (max-width: 760px) {
   .shell { width: min(100% - 30px, 620px); }
-  .header-inner { min-height: 72px; }
-  .brand-mark { width: 47px; height: 47px; flex-basis: 47px; }
-  .brand strong { font-size: 16px; }
+  .header-inner { min-height: 64px; gap: 10px; }
+  .brand { min-width: 0; }
+  .brand span:last-child { min-width: 0; }
+  .brand-mark { width: 40px; height: 40px; flex-basis: 40px; }
+  .brand strong { font-size: 15px; }
   .brand small { font-size: 8px; }
-  .header-chip { font-size: 0; width: 33px; height: 33px; justify-content: center; padding: 0; }
+  .header-chip { display: none; }
+  .header-actions { flex-wrap: nowrap; gap: 6px; flex-shrink: 0; }
+  .header-actions .button-small { min-height: 32px; padding: 5px 9px; font-size: 11px; }
   .public-main { padding-top: 26px; padding-bottom: 24px; }
   .public-grid { display: flex; flex-direction: column; gap: 25px; }
   .intro-panel { padding-top: 0; width: 100%; }
