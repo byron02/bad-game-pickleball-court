@@ -125,6 +125,21 @@ test('a confirmed reservation with checkedIn true is eligible', () => {
   }).valid, true);
 });
 
+test('locked doubles partners stay on the same side', () => {
+  const players = [
+    player('me', 'intermediate', 'man', { partnerId: 'stef', waitMinutes: 40 }),
+    player('stef', 'intermediate', 'woman', { partnerId: 'me', waitMinutes: 40 }),
+    player('a', 'intermediate', 'man', { waitMinutes: 10 }),
+    player('b', 'intermediate', 'woman', { waitMinutes: 10 }),
+    player('c', 'intermediate', 'man', { waitMinutes: 5 }),
+    player('d', 'intermediate', 'woman', { waitMinutes: 5 }),
+  ];
+  const lineup = proposeLineup({ court: court('court-1', ['intermediate']), players, random: () => 0.5 });
+  assert.ok(lineup);
+  const withMe = lineup.sideA.includes('me') ? lineup.sideA : lineup.sideB;
+  assert.ok(withMe.includes('me') && withMe.includes('stef'));
+});
+
 test('waiting longer and playing fewer games affect the proposed four', () => {
   const players = [
     player('waited', 'intermediate', 'man', { waitMinutes: 50, gamesPlayed: 3 }),

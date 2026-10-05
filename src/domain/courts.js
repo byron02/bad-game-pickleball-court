@@ -2,9 +2,10 @@
  * Storage-independent rules for configuring and running one court at a time.
  *
  * A player is { id, skill, gender, checkedIn, waitMinutes?, gamesPlayed?,
- * recentPartnerIds?, recentOpponentIds? }. `status: "checked_in"` is also
- * accepted instead of `checkedIn: true`. A lineup is
- * { sideA: [playerId, ...], sideB: [playerId, ...] }.
+ * partnerId?, recentPartnerIds?, recentOpponentIds? }.
+ * `partnerId` locks two players as a doubles pair for draws (they stay on the
+ * same side). `status: "checked_in"` is also accepted instead of
+ * `checkedIn: true`. A lineup is { sideA: [playerId, ...], sideB: [playerId, ...] }.
  */
 
 export const SKILLS = Object.freeze(['beginner', 'intermediate', 'advanced']);
@@ -203,6 +204,32 @@ function recentIncludes(player, field, id) {
   return Array.isArray(player[field]) && player[field].includes(id);
 }
 
+function mutualPartner(player, byId) {
+  const partnerId = player?.partnerId;
+  if (!validId(partnerId)) return null;
+  const partner = byId.get(partnerId);
+  if (!partner || partner.partnerId !== player.id) return null;
+  return partner;
+}
+
+function lockedTogether(a, b) {
+  return validId(a?.id) && validId(b?.id) && a.partnerId === b.id && b.partnerId === a.id;
+}
+
+function respectsLockedPartners(sideA, sideB) {
+  const roster = [...sideA, ...sideB];
+  const byId = new Map(roster.map((player) => [player.id, player]));
+  const teamOf = new Map();
+  for (const player of sideA) teamOf.set(player.id, 'A');
+  for (const player of sideB) teamOf.set(player.id, 'B');
+  for (const player of roster) {
+    const partner = mutualPartner(player, byId);
+    if (!partner || !teamOf.has(partner.id)) continue;
+    if (teamOf.get(player.id) !== teamOf.get(partner.id)) return false;
+  }
+  return true;
+}
+
 function pairingCost(sideA, sideB) {
   const teamSkillDifference = Math.abs(
     sideA.reduce((sum, player) => sum + skillRank[skillOf(player.skill)], 0) -
@@ -212,6 +239,7 @@ function pairingCost(sideA, sideB) {
   for (const side of [sideA, sideB]) {
     for (let i = 0; i < side.length; i += 1) {
       for (let j = i + 1; j < side.length; j += 1) {
+        if (lockedTogether(side[i], side[j])) continue;
         if (recentIncludes(side[i], 'recentPartnerIds', side[j].id) ||
             recentIncludes(side[j], 'recentPartnerIds', side[i].id)) cost += 12;
       }
@@ -241,7 +269,8 @@ function chooseTeams(selected, division, random) {
   const choices = partitions
     .map(([a, b]) => ({ sideA: a.map((i) => selected[i]), sideB: b.map((i) => selected[i]) }))
     .filter(({ sideA, sideB }) =>
-      teamPassesDivision(sideA, division) && teamPassesDivision(sideB, division))
+      teamPassesDivision(sideA, division) && teamPassesDivision(sideB, division) &&
+      respectsLockedPartners(sideA, sideB))
     .map((choice) => ({ ...choice, cost: pairingCost(choice.sideA, choice.sideB) + randomUnit(random) * 0.1 }))
     .sort((a, b) => a.cost - b.cost);
   if (choices.length === 0) return null;
@@ -249,6 +278,67 @@ function chooseTeams(selected, division, random) {
   return randomUnit(random) < 0.5
     ? { sideA: best.sideA.map((player) => player.id), sideB: best.sideB.map((player) => player.id) }
     : { sideA: best.sideB.map((player) => player.id), sideB: best.sideA.map((player) => player.id) };
+}
+
+function selectForCourt(eligible, size, division) {
+  const byId = new Map(eligible.map((player) => [player.id, player]));
+  const selected = [];
+  const used = new Set();
+
+  if (division === 'mixed') {
+    const women = eligible.filter((player) => genderOf(player.gender) === 'woman');
+    const men = eligible.filter((player) => genderOf(player.gender) === 'man');
+    // Prefer locked mixed pairs (one woman + one man) as ready sides.
+    for (const player of eligible) {
+      if (selected.length >= size) break;
+      if (used.has(player.id)) continue;
+      const partner = mutualPartner(player, byId);
+      if (!partner || used.has(partner.id)) continue;
+      const genders = new Set([genderOf(player.gender), genderOf(partner.gender)]);
+      if (!genders.has('woman') || !genders.has('man')) continue;
+      selected.push(player, partner);
+      used.add(player.id);
+      used.add(partner.id);
+    }
+    for (const pool of [women, men]) {
+      for (const player of pool) {
+        if (selected.length >= size) break;
+        if (used.has(player.id)) continue;
+        if (mutualPartner(player, byId) && !used.has(player.partnerId)) {
+          // Same-gender locked pair cannot play mixed — leave both out.
+          const partner = mutualPartner(player, byId);
+          if (genderOf(partner.gender) === genderOf(player.gender)) {
+            used.add(player.id);
+            used.add(partner.id);
+            continue;
+          }
+        }
+        const takenWomen = selected.filter((item) => genderOf(item.gender) === 'woman').length;
+        const takenMen = selected.filter((item) => genderOf(item.gender) === 'man').length;
+        if (genderOf(player.gender) === 'woman' && takenWomen >= 2) continue;
+        if (genderOf(player.gender) === 'man' && takenMen >= 2) continue;
+        selected.push(player);
+        used.add(player.id);
+      }
+    }
+    return selected.length === size ? selected : null;
+  }
+
+  for (const player of eligible) {
+    if (selected.length >= size) break;
+    if (used.has(player.id)) continue;
+    const partner = size === 4 ? mutualPartner(player, byId) : null;
+    if (partner && !used.has(partner.id)) {
+      if (selected.length + 2 > size) continue;
+      selected.push(player, partner);
+      used.add(player.id);
+      used.add(partner.id);
+      continue;
+    }
+    selected.push(player);
+    used.add(player.id);
+  }
+  return selected.length === size ? selected : null;
 }
 
 /**
@@ -271,15 +361,8 @@ export function proposeLineup({ court, players, activeGames = [], random = Math.
     .map(({ player }) => player);
 
   if (eligible.length < size) return null;
-  let selected;
-  if (division === 'mixed') {
-    const women = eligible.filter((player) => genderOf(player.gender) === 'woman').slice(0, 2);
-    const men = eligible.filter((player) => genderOf(player.gender) === 'man').slice(0, 2);
-    if (women.length < 2 || men.length < 2) return null;
-    selected = [...women, ...men];
-  } else {
-    selected = eligible.slice(0, size);
-  }
+  const selected = selectForCourt(eligible, size, division);
+  if (!selected) return null;
 
   const lineup = chooseTeams(selected, division, random);
   if (!lineup) return null;

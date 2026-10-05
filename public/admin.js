@@ -1,7 +1,7 @@
 import {
   getAdminDashboard, watchAdminDashboard, signInOrganizerWithGoogle,
   signOutOrganizer, approveEntry, rejectEntry, removeEntry, checkInEntry, checkOutEntry,
-  reservePlayer, updatePlayer, updateSession, resetSession,
+  reservePlayer, updatePlayer, updateSession, resetSession, setEntryPartner,
 } from '../src/firebaseStore.js';
 import { initCourtsUI } from './courts-ui.js';
 
@@ -161,6 +161,11 @@ function syncPendingBadges(count) {
   }
 }
 
+function partnerName(entry) {
+  if (!entry?.partnerPlayerId) return null;
+  return entries.find((item) => item.playerId === entry.partnerPlayerId)?.name || 'Partner';
+}
+
 function renderEntry(entry, kind) {
   const row = node('article', 'entry-row');
   row.append(avatar(entry));
@@ -170,6 +175,9 @@ function renderEntry(entry, kind) {
   if (kind === 'pending') top.append(statusBadge(entry.playerId ? 'Existing player claim' : 'New profile', entry.playerId ? 'blue' : 'amber'));
   if (kind === 'confirmed') top.append(statusBadge(entry.checkedIn ? 'Checked in' : 'Reserved', entry.checkedIn ? 'green' : 'blue'));
   if (kind === 'waitlist') top.append(statusBadge('Waitlist', 'amber'));
+  if (kind === 'confirmed' && entry.partnerPlayerId) {
+    top.append(statusBadge(`With ${partnerName(entry)}`, 'amber'));
+  }
   body.append(top);
   if (kind === 'pending') {
     body.append(skillSelect(entry.id, entry.skillLevel));
@@ -180,6 +188,7 @@ function renderEntry(entry, kind) {
   } else {
     const details = [entry.skillLevel || 'Skill not set'];
     if (entry.division && entry.division !== 'unspecified') details.push(entry.division);
+    if (kind === 'confirmed' && entry.partnerPlayerId) details.push(`Locked doubles with ${partnerName(entry)}`);
     body.append(node('div', 'entry-meta', details.join(' · ')));
   }
   const actions = node('div', 'entry-actions');
@@ -188,6 +197,10 @@ function renderEntry(entry, kind) {
     actions.append(actionButton('Reject', 'reject', entry.id, 'button-outline'));
   } else if (kind === 'confirmed') {
     actions.append(actionButton(entry.checkedIn ? 'Check out' : 'Check in', entry.checkedIn ? 'check-out' : 'check-in', entry.id, entry.checkedIn ? 'button-outline' : 'button-primary'));
+    if (entry.playerId) {
+      actions.append(actionButton(entry.partnerPlayerId ? 'Change pair' : 'Pair doubles', 'pair', entry.id, 'button-outline'));
+      if (entry.partnerPlayerId) actions.append(actionButton('Unpair', 'unpair', entry.id, 'button-quiet'));
+    }
     actions.append(actionButton('Remove', 'remove', entry.id, 'button-quiet'));
   } else if (kind === 'waitlist') {
     actions.append(actionButton('Remove', 'remove', entry.id, 'button-quiet'));
@@ -395,6 +408,23 @@ const courtUI = initCourtsUI({
 
 async function runEntryAction(action, entryId, button) {
   if (!session) return;
+  if (action === 'pair') {
+    openPartnerDialog(entryId);
+    return;
+  }
+  if (action === 'unpair') {
+    button.disabled = true;
+    try {
+      await setEntryPartner(session.id, entryId, null);
+      await refreshDashboard();
+      showAlert('Doubles pair cleared.', 'success');
+    } catch (error) {
+      showAlert(friendlyError(error));
+    } finally {
+      button.disabled = false;
+    }
+    return;
+  }
   const operations = {
     approve: approveEntry, reject: rejectEntry, remove: removeEntry,
     'check-in': checkInEntry, 'check-out': checkOutEntry,
@@ -423,6 +453,45 @@ async function runEntryAction(action, entryId, button) {
     button.disabled = false;
   }
 }
+
+function openPartnerDialog(entryId) {
+  const entry = entries.find((item) => item.id === entryId);
+  if (!entry?.playerId) return showAlert('Only saved player profiles can be paired.');
+  const select = $('partnerPlayerInput');
+  select.replaceChildren();
+  const candidates = entries.filter((item) =>
+    item.status === 'confirmed' && item.playerId && item.playerId !== entry.playerId);
+  if (!candidates.length) return showAlert('Need another confirmed player to pair with.');
+  for (const candidate of candidates) {
+    const option = node('option', '', candidate.partnerPlayerId && candidate.partnerPlayerId !== entry.playerId
+      ? `${candidate.name} (currently paired)`
+      : candidate.name);
+    option.value = candidate.playerId;
+    if (candidate.playerId === entry.partnerPlayerId) option.selected = true;
+    select.append(option);
+  }
+  $('partnerEntryInput').value = entryId;
+  $('partnerDialogTitle').textContent = `Pair ${entry.name}`;
+  $('partnerDialog').showModal();
+}
+
+$('cancelPartner')?.addEventListener('click', () => $('partnerDialog')?.close());
+$('partnerForm')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!session) return;
+  const save = $('savePartner');
+  save.disabled = true;
+  try {
+    await setEntryPartner(session.id, $('partnerEntryInput').value, $('partnerPlayerInput').value);
+    $('partnerDialog').close();
+    await refreshDashboard();
+    showAlert('Doubles partners locked for today’s draws.', 'success');
+  } catch (error) {
+    showAlert(friendlyError(error));
+  } finally {
+    save.disabled = false;
+  }
+});
 
 for (const list of [ui.pendingList, ui.confirmedList, ui.waitlistList, ui.todayPlayersList, ui.todayWaitlistList]) {
   list?.addEventListener('click', (event) => {

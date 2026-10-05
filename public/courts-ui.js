@@ -40,8 +40,13 @@ export function initCourtsUI({ getSession, getEntries, showAlert, refreshRoster 
     const fromPreview = previewPlayers.find((player) => player.id === id);
     const name = fromPreview?.name || nameFor(id, game);
     const gamesPlayed = Number(fromPreview?.gamesPlayed || 0);
-    if (!fromPreview) return name;
-    return `${name} · ${gamesPlayed} ${gamesPlayed === 1 ? 'game' : 'games'}`;
+    const entry = getEntries().find((item) => item.playerId === id);
+    const partner = entry?.partnerPlayerId
+      ? getEntries().find((item) => item.playerId === entry.partnerPlayerId)?.name
+      : null;
+    if (!fromPreview) return partner ? `${name} (with ${partner})` : name;
+    const games = `${gamesPlayed} ${gamesPlayed === 1 ? 'game' : 'games'}`;
+    return partner ? `${name} · ${games} · with ${partner}` : `${name} · ${games}`;
   }
 
   function teamRow(side, ids, game, previewPlayers = []) {

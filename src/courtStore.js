@@ -199,6 +199,7 @@ function domainPlayer(entry) {
     skill: entry.skillLevel,
     gender: entry.division || 'unspecified',
     checkedIn: entry.status === 'confirmed' && entry.checkedIn === true,
+    partnerId: entry.partnerPlayerId || null,
   };
 }
 

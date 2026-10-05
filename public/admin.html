@@ -266,6 +266,21 @@
     </form>
   </dialog>
 
+  <dialog id="partnerDialog" class="confirm-dialog court-dialog" aria-labelledby="partnerDialogTitle">
+    <form id="partnerForm">
+      <h2 id="partnerDialogTitle">Lock doubles partners</h2>
+      <p>Paired players stay on the same side when Courts draws the next game.</p>
+      <input id="partnerEntryInput" type="hidden">
+      <label class="field-label" for="partnerPlayerInput">Partner</label>
+      <select id="partnerPlayerInput" class="input" required></select>
+      <p class="field-help">Example: you and Stef stay together vs another team.</p>
+      <div class="dialog-actions">
+        <button id="cancelPartner" class="button button-outline" type="button">Cancel</button>
+        <button id="savePartner" class="button button-primary" type="submit">Save pair</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="playerDialog" class="confirm-dialog court-dialog" aria-labelledby="playerDialogTitle">
     <form id="playerForm">
       <h2 id="playerDialogTitle">Edit player</h2>

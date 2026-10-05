@@ -185,6 +185,7 @@ function normalizedEntry(snapshot, players = new Map()) {
     reviewedAt: timestamp(value.reviewedAt),
     checkedInAt: timestamp(value.checkedInAt),
     checkedOutAt: timestamp(value.checkedOutAt),
+    partnerPlayerId: value.partnerPlayerId || null,
   };
 }
 
@@ -544,11 +545,28 @@ async function closeEntry(sessionId, entryId, status) {
     const lock = prior.playerId && wasConfirmed ? await transaction.get(playerLockRef(sessionId, prior.playerId)) : null;
     if (lock?.exists()) throw error('Replace or finish this player\'s game first.');
     const existingClaim = claim ? await transaction.get(claim) : null;
+    let partnerEntry = null;
+    if (prior.partnerPlayerId) {
+      const partnerClaim = await transaction.get(claimRef(sessionId, prior.partnerPlayerId));
+      if (partnerClaim.exists()) {
+        partnerEntry = await transaction.get(entryRef(sessionId, partnerClaim.data().entryId));
+      }
+    }
     transaction.update(eRef, {
-      status, checkedIn: false, checkedOutAt: status === 'checked_out' ? serverTimestamp() : prior.checkedOutAt || null,
-      reviewedAt: serverTimestamp(), updatedAt: serverTimestamp(),
+      status,
+      checkedIn: false,
+      checkedOutAt: status === 'checked_out' ? serverTimestamp() : prior.checkedOutAt || null,
+      reviewedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      partnerPlayerId: null,
     });
     if (existingClaim?.exists() && existingClaim.data().entryId === entryId) transaction.delete(claim);
+    if (partnerEntry?.exists() && partnerEntry.data().partnerPlayerId === prior.playerId) {
+      transaction.update(partnerEntry.ref, {
+        partnerPlayerId: null,
+        updatedAt: serverTimestamp(),
+      });
+    }
     const sessionPatch = {
       confirmedCount: session.data().confirmedCount - (wasConfirmed ? 1 : 0),
       waitlistCount: (session.data().waitlistCount || 0) - (wasWaitlisted ? 1 : 0),
@@ -565,6 +583,81 @@ async function closeEntry(sessionId, entryId, status) {
 export async function rejectEntry(sessionId, entryId) { return closeEntry(sessionId, entryId, 'rejected'); }
 export async function removeEntry(sessionId, entryId) { return closeEntry(sessionId, entryId, 'removed'); }
 export async function checkOutEntry(sessionId, entryId) { return closeEntry(sessionId, entryId, 'checked_out'); }
+
+/** Lock two confirmed players as a doubles pair for today's draws, or clear the lock. */
+export async function setEntryPartner(sessionId, entryId, partnerPlayerId = null) {
+  await ensureOrganizer();
+  const partnerId = partnerPlayerId ? idOfPlayer(partnerPlayerId) : null;
+  await runTransaction(db, async (transaction) => {
+    const eRef = entryRef(sessionId, entryId);
+    const entry = await transaction.get(eRef);
+    if (!entry.exists() || entry.data().status !== 'confirmed') {
+      throw error('Only confirmed players can be paired.');
+    }
+    const prior = entry.data();
+    if (!prior.playerId) throw error('Pair players who have a saved profile.');
+
+    const previousPartnerId = prior.partnerPlayerId || null;
+    let previousPartnerEntry = null;
+    if (previousPartnerId) {
+      const previousClaim = await transaction.get(claimRef(sessionId, previousPartnerId));
+      if (previousClaim.exists()) {
+        previousPartnerEntry = await transaction.get(entryRef(sessionId, previousClaim.data().entryId));
+      }
+    }
+
+    let nextPartnerEntry = null;
+    let nextPartnerPrevious = null;
+    if (partnerId) {
+      if (partnerId === prior.playerId) throw error('A player cannot pair with themselves.');
+      const partnerClaim = await transaction.get(claimRef(sessionId, partnerId));
+      if (!partnerClaim.exists()) throw error('Partner is not on today’s roster.');
+      nextPartnerEntry = await transaction.get(entryRef(sessionId, partnerClaim.data().entryId));
+      if (!nextPartnerEntry.exists() || nextPartnerEntry.data().status !== 'confirmed') {
+        throw error('Partner must also be confirmed for today.');
+      }
+      const nextPriorPartnerId = nextPartnerEntry.data().partnerPlayerId || null;
+      if (nextPriorPartnerId && nextPriorPartnerId !== prior.playerId) {
+        const otherClaim = await transaction.get(claimRef(sessionId, nextPriorPartnerId));
+        if (otherClaim.exists()) {
+          nextPartnerPrevious = await transaction.get(entryRef(sessionId, otherClaim.data().entryId));
+        }
+      }
+    }
+
+    if (previousPartnerEntry?.exists() && previousPartnerEntry.data().partnerPlayerId === prior.playerId) {
+      transaction.update(previousPartnerEntry.ref, {
+        partnerPlayerId: null,
+        updatedAt: serverTimestamp(),
+      });
+    }
+    if (nextPartnerPrevious?.exists() &&
+        nextPartnerPrevious.data().partnerPlayerId === partnerId) {
+      transaction.update(nextPartnerPrevious.ref, {
+        partnerPlayerId: null,
+        updatedAt: serverTimestamp(),
+      });
+    }
+    transaction.update(eRef, {
+      partnerPlayerId: partnerId,
+      updatedAt: serverTimestamp(),
+    });
+    if (nextPartnerEntry) {
+      transaction.update(nextPartnerEntry.ref, {
+        partnerPlayerId: prior.playerId,
+        updatedAt: serverTimestamp(),
+      });
+    }
+  });
+  return { partnerPlayerId: partnerId };
+}
+
+function idOfPlayer(value) {
+  if (typeof value !== 'string' || !value.trim() || value.includes('/')) {
+    throw error('Player id is invalid.');
+  }
+  return value.trim();
+}
 
 async function withContentionRetries(work) {
   let lastError;
