@@ -118,7 +118,7 @@ test('public search reads only the approved directory; full profiles and session
       });
       await setDoc(doc(context.firestore(), 'playerDirectory', 'ana'), {
         name: 'Ana Cruz', nameLower: 'ana cruz', skillLevel: 'intermediate',
-        division: 'woman', photoData: null,
+        division: 'woman', photoData: null, wins: 2, losses: 1,
       });
     });
     const db = env.authenticatedContext('player-three', anonymous).firestore();
@@ -127,6 +127,11 @@ test('public search reads only the approved directory; full profiles and session
       startAt('an'), endAt('an\uf8ff'), limit(20),
     )));
     assert.equal(found.docs.length, 1);
+    const standings = await assertSucceeds(getDocs(query(
+      collection(db, 'playerDirectory'), orderBy('wins', 'desc'), limit(20),
+    )));
+    assert.equal(standings.docs[0].id, 'ana');
+    assert.equal(standings.docs[0].data().wins, 2);
     await assertFails(getDocs(collection(db, 'playerDirectory')));
     await assertFails(setDoc(doc(db, 'playerDirectory', 'intruder'), {
       name: 'Intruder', nameLower: 'intruder', skillLevel: 'advanced', division: 'man', photoData: null,
