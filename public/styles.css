@@ -40,7 +40,9 @@ h1, h2, h3, p { margin: 0; }
 .brand strong { display: block; font-size: 19px; line-height: 1.05; letter-spacing: -.035em; font-weight: 850; }
 .brand small { display: block; margin-top: 5px; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .17em; font-weight: 800; white-space: nowrap; }
 .header-chip { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--line); background: var(--surface-tint); border-radius: 999px; padding: 7px 12px; color: var(--muted); font-size: 12px; font-weight: 750; white-space: nowrap; }
-.header-actions { display: flex; align-items: center; gap: 10px; }
+.header-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.header-settings { display: none; }
+.header-settings.current { border-color: var(--blue); color: var(--blue); background: var(--blue-pale); }
 .live-dot { width: 7px; height: 7px; border-radius: 50%; background: #2fac7b; box-shadow: 0 0 0 4px #dff6eb; }
 .eyebrow, .label-overline { display: block; color: var(--blue); text-transform: uppercase; letter-spacing: .15em; font-size: 11px; font-weight: 850; }
 .label-overline { color: var(--muted); letter-spacing: .12em; }
@@ -546,23 +548,26 @@ h1, h2, h3, p { margin: 0; }
   }
   .admin-side-column { order: -1; }
   .court-grid { grid-template-columns: 1fr; }
-  .admin-main { padding-bottom: 92px; }
+  .admin-main { padding-bottom: 88px; }
   .web-nav { display: none; }
+  .header-settings:not([hidden]) { display: inline-flex; }
+  .header-actions { gap: 6px; }
   .mobile-nav {
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
-    display: grid; grid-template-columns: repeat(5, 1fr); gap: 2px;
-    min-height: 64px; padding: 6px 6px calc(6px + env(safe-area-inset-bottom));
+    display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 2px;
+    padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
     background: rgba(255, 255, 255, 0.96); border-top: 1px solid var(--line);
     box-shadow: 0 -8px 24px rgb(16 42 72 / 8%); backdrop-filter: blur(10px);
   }
   .mobile-nav button {
-    position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 2px; min-height: 52px; border: 0; border-radius: 10px; background: transparent;
-    color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .01em;
+    position: relative; display: flex; align-items: center; justify-content: center;
+    min-height: 48px; padding: 0 2px; border: 0; border-radius: 10px; background: transparent;
+    color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: .01em;
+    white-space: nowrap;
   }
   .mobile-nav button.current { color: var(--blue); background: var(--blue-pale); }
   .mobile-nav-badge {
-    position: absolute; top: 4px; right: calc(50% - 22px);
+    position: absolute; top: 4px; right: 4px;
     min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px;
     background: var(--blue); color: white; font-size: 9px; line-height: 16px; font-weight: 800;
   }

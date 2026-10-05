@@ -10,7 +10,7 @@ const $ = (id) => document.getElementById(id);
 const ui = {
   alert: $('adminAlert'), loading: $('loadingPanel'), loadingMessage: $('loadingMessage'),
   reloadPage: $('reloadPageButton'), auth: $('authPanel'), dashboard: $('dashboard'),
-  googleSignIn: $('googleSignInButton'), signOut: $('signOutButton'),
+  googleSignIn: $('googleSignInButton'), signOut: $('signOutButton'), openSettings: $('openSettingsButton'),
   sessionDate: $('sessionDateInput'), capacityInput: $('capacityInput'), settingsForm: $('settingsForm'),
   confirmed: $('adminConfirmed'), capacity: $('adminCapacity'), fill: $('adminCapacityFill'), availability: $('adminAvailability'),
   dateLabel: $('adminDateLabel'), checkedIn: $('checkedInMetric'), pending: $('pendingMetric'), waitlist: $('waitlistMetric'), open: $('openMetric'),
@@ -285,6 +285,7 @@ function showView(name, { updateHash = true } = {}) {
   document.querySelectorAll('.web-nav a[data-view], .mobile-nav button[data-view]').forEach((item) => {
     item.classList.toggle('current', item.dataset.view === view);
   });
+  if (ui.openSettings) ui.openSettings.classList.toggle('current', view === 'settings');
   if (updateHash) {
     const nextHash = `#${view}`;
     if (location.hash !== nextHash) history.replaceState(null, '', nextHash);
@@ -618,6 +619,7 @@ async function beginDashboard(date) {
   ui.auth.hidden = true;
   ui.dashboard.hidden = false;
   ui.signOut.hidden = false;
+  if (ui.openSettings) ui.openSettings.hidden = false;
   renderDashboard(snapshot);
   const hashView = location.hash.replace(/^#/, '');
   const pendingCount = snapshot.entries.filter((entry) => entry.status === 'pending').length;
@@ -642,6 +644,7 @@ function showAuth() {
   ui.auth.hidden = false;
   ui.dashboard.hidden = true;
   ui.signOut.hidden = true;
+  if (ui.openSettings) ui.openSettings.hidden = true;
 }
 
 async function refreshDashboard() {
@@ -1013,6 +1016,7 @@ ui.signOut.addEventListener('click', async () => {
     showAlert(friendlyError(error));
   }
 });
+ui.openSettings?.addEventListener('click', () => showView('settings'));
 
 ui.organizerAddForm?.addEventListener('submit', async (event) => {
   event.preventDefault();
