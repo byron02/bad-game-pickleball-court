@@ -237,11 +237,13 @@ test('claimed player can request a doubles partner via playerClaims lookup', { s
   await assertSucceeds(getDoc(doc(alex, 'sessions', sessionId, 'playerClaims', 'p2')));
   await assertSucceeds(updateDoc(doc(alex, 'sessions', sessionId, 'entries', 'player-one'), {
     partnerRequestToPlayerId: 'p2',
+    partnerRequestGames: 2,
     updatedAt: serverTimestamp(),
   }));
   // Cannot write someone else's outbound request.
   await assertFails(updateDoc(doc(alex, 'sessions', sessionId, 'entries', 'player-two'), {
     partnerRequestToPlayerId: 'p1',
+    partnerRequestGames: 2,
     updatedAt: serverTimestamp(),
   }));
 });

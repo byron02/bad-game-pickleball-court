@@ -640,6 +640,41 @@ export async function completeCourtGame({ sessionId, gameId, winnerSide }) {
       activeGameCount: Math.max(0, (session.data().activeGameCount || 0) - 1),
       updatedAt: serverTimestamp(),
     });
+    const partnerPatchByPath = new Map();
+    const consumed = new Set();
+    const entryByPlayer = new Map(entries.map((snap) => [snap.data().playerId, snap]));
+    for (const side of [data.lineup?.sideA || [], data.lineup?.sideB || []]) {
+      if (side.length !== 2) continue;
+      const [aId, bId] = side;
+      const aEntry = entryByPlayer.get(aId);
+      const bEntry = entryByPlayer.get(bId);
+      if (!aEntry || !bEntry) continue;
+      const a = aEntry.data();
+      const b = bEntry.data();
+      if (a.partnerPlayerId !== bId || b.partnerPlayerId !== aId) continue;
+      const key = [aId, bId].sort().join(':');
+      if (consumed.has(key)) continue;
+      consumed.add(key);
+      const remaining = Number.isInteger(a.partnerGamesRemaining)
+        ? a.partnerGamesRemaining
+        : (Number.isInteger(b.partnerGamesRemaining) ? b.partnerGamesRemaining : null);
+      if (remaining == null) continue;
+      if (remaining <= 1) {
+        const clear = {
+          partnerPlayerId: null,
+          partnerRequestToPlayerId: null,
+          partnerRequestGames: null,
+          partnerGamesRemaining: null,
+        };
+        partnerPatchByPath.set(aEntry.ref.path, clear);
+        partnerPatchByPath.set(bEntry.ref.path, clear);
+      } else {
+        const next = { partnerGamesRemaining: remaining - 1 };
+        partnerPatchByPath.set(aEntry.ref.path, next);
+        partnerPatchByPath.set(bEntry.ref.path, next);
+      }
+    }
+
     for (let i = 0; i < ids.length; i += 1) {
       const delta = recorded.statDeltas[ids[i]];
       const player = players[i].data();
@@ -662,6 +697,7 @@ export async function completeCourtGame({ sessionId, gameId, winnerSide }) {
         wins: (entry.wins || 0) + delta.wins,
         losses: (entry.losses || 0) + delta.losses,
         updatedAt: serverTimestamp(),
+        ...(partnerPatchByPath.get(entries[i].ref.path) || {}),
       });
       transaction.delete(lockRef(sessionId, ids[i]));
     }

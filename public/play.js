@@ -51,6 +51,8 @@ const ui = {
   leave: $('leaveButton'),
   pairPanel: $('pairPanel'),
   pairStatus: $('pairStatus'),
+  pairDuration: $('pairDuration'),
+  pairDurationOptions: $('pairDurationOptions'),
   pairSearchLabel: $('pairSearchLabel'),
   pairSearchField: $('pairSearchField'),
   pairSearch: $('pairSearch'),
@@ -67,6 +69,19 @@ let stopRoster = null;
 let stopBoard = null;
 let alertTimer = null;
 let deskView = 'status';
+let pairGamesChoice = null; // null = unlimited
+
+const PAIR_GAME_OPTIONS = [
+  { value: 1, label: '1' },
+  { value: 2, label: '2' },
+  { value: 3, label: '3' },
+  { value: null, label: 'Unlimited' },
+];
+
+function gamesTogetherLabel(games) {
+  if (games == null) return 'unlimited';
+  return games === 1 ? '1 game' : `${games} games`;
+}
 
 function showAlert(message) {
   ui.alert.textContent = message;
@@ -165,7 +180,7 @@ function renderBoard() {
   }
   ui.boardTitle.textContent = 'Waiting for a court draw';
   ui.boardDetail.textContent = mine.partnerPlayerId
-    ? `Locked with ${nameForPlayerId(mine.partnerPlayerId)}. You’ll stay together when a court draws you.`
+    ? `Locked with ${nameForPlayerId(mine.partnerPlayerId)}${mine.partnerGamesRemaining != null ? ` · ${gamesTogetherLabel(mine.partnerGamesRemaining)} left` : ' · unlimited'}. You’ll stay together when a court draws you.`
     : 'You’re in the pool as a solo until a partner request is approved.';
 }
 
@@ -191,7 +206,8 @@ function renderInbound() {
     const row = document.createElement('div');
     row.className = 'play-inbound-row';
     const copy = document.createElement('p');
-    copy.textContent = `${entry.name} wants to pair with you. Until you approve, you both stay solo for draws.`;
+    const games = gamesTogetherLabel(entry.partnerRequestGames);
+    copy.textContent = `${entry.name} wants to pair · ${games}. Until you approve, you both stay solo.`;
     const actions = document.createElement('div');
     actions.className = 'play-actions play-actions-inline';
     const approve = document.createElement('button');
@@ -301,6 +317,24 @@ function setPairSearchVisible(visible) {
   if (ui.pairSearchLabel) ui.pairSearchLabel.hidden = !visible;
   if (ui.pairSearchField) ui.pairSearchField.hidden = !visible;
   if (ui.pairSearch) ui.pairSearch.hidden = !visible;
+  if (ui.pairDuration) ui.pairDuration.hidden = !visible;
+  if (visible) renderPairDurationOptions();
+}
+
+function renderPairDurationOptions() {
+  if (!ui.pairDurationOptions) return;
+  ui.pairDurationOptions.replaceChildren();
+  for (const option of PAIR_GAME_OPTIONS) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `play-pair-duration-chip${pairGamesChoice === option.value ? ' active' : ''}`;
+    button.textContent = option.label;
+    button.addEventListener('click', () => {
+      pairGamesChoice = option.value;
+      renderPairDurationOptions();
+    });
+    ui.pairDurationOptions.append(button);
+  }
 }
 
 function clearDeskSelection() {
@@ -412,9 +446,12 @@ function renderPairPanel(entry) {
   if (entry.partnerPlayerId) {
     const partner = roster.find((item) => item.playerId === entry.partnerPlayerId);
     const partnerRecord = recordLabel(partner);
-    ui.pairStatus.textContent = partnerRecord
-      ? `Locked with ${nameForPlayerId(entry.partnerPlayerId)} (${partnerRecord}). Draws keep you on the same side.`
-      : `Locked with ${nameForPlayerId(entry.partnerPlayerId)}. Draws keep you on the same side.`;
+    const gamesBit = entry.partnerGamesRemaining != null
+      ? `${gamesTogetherLabel(entry.partnerGamesRemaining)} left`
+      : 'unlimited';
+    const bits = [`Locked with ${nameForPlayerId(entry.partnerPlayerId)}`, gamesBit];
+    if (partnerRecord) bits.push(partnerRecord);
+    ui.pairStatus.textContent = `${bits.join(' · ')}.`;
     setPairSearchVisible(false);
     const unpair = document.createElement('button');
     unpair.type = 'button';
@@ -427,7 +464,7 @@ function renderPairPanel(entry) {
 
   if (entry.partnerRequestToPlayerId) {
     const name = nameForPlayerId(entry.partnerRequestToPlayerId);
-    ui.pairStatus.textContent = `Pending request · ${name}`;
+    ui.pairStatus.textContent = `Pending request · ${name} · ${gamesTogetherLabel(entry.partnerRequestGames)}`;
     setPairSearchVisible(false);
     setPairCandidatesVisible(false);
     const cancel = document.createElement('button');
@@ -472,7 +509,7 @@ function renderPairPanel(entry) {
     button.type = 'button';
     button.className = 'button button-primary button-small';
     button.textContent = 'Request pair';
-    button.addEventListener('click', () => runPairAction('request', candidate.playerId, button));
+    button.addEventListener('click', () => runPairAction('request', candidate.playerId, button, pairGamesChoice));
     row.append(info, button);
     ui.pairCandidates.append(row);
   }
@@ -504,13 +541,13 @@ async function runAction(action, button) {
   }
 }
 
-async function runPairAction(action, target, button) {
+async function runPairAction(action, target, button, gamesTogether = null) {
   if (!session || !myEntry()) return showAlert('Unlock your name with a PIN first.');
   clearAlert();
   const old = button?.textContent;
   if (button) button.disabled = true;
   try {
-    if (action === 'request') await requestPartner(session.id, target);
+    if (action === 'request') await requestPartner(session.id, target, gamesTogether);
     if (action === 'cancel') await cancelPartnerRequest(session.id);
     if (action === 'approve') await approvePartnerRequest(session.id, target);
     if (action === 'decline') await declinePartnerRequest(session.id, target);

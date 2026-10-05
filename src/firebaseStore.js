@@ -203,6 +203,8 @@ function normalizedEntry(snapshot, players = new Map()) {
     checkedOutAt: timestamp(value.checkedOutAt),
     partnerPlayerId: value.partnerPlayerId || null,
     partnerRequestToPlayerId: value.partnerRequestToPlayerId || null,
+    partnerRequestGames: Number.isInteger(value.partnerRequestGames) ? value.partnerRequestGames : null,
+    partnerGamesRemaining: Number.isInteger(value.partnerGamesRemaining) ? value.partnerGamesRemaining : null,
     hasPlayPin: value.hasPlayPin === true,
     playClaimUid: value.playClaimUid || null,
   };
@@ -783,6 +785,7 @@ export async function approveEntry(sessionId, entryId, options = {}) {
       playerId: freshPlayer.id, name, status, skillLevel, approvedAt: serverTimestamp(),
       reviewedAt: serverTimestamp(), updatedAt: serverTimestamp(),
       sittingOut: false, partnerPlayerId: null, partnerRequestToPlayerId: null,
+      partnerRequestGames: null, partnerGamesRemaining: null,
     });
     transaction.update(sRef, {
       confirmedCount: session.data().confirmedCount + (confirmed ? 1 : 0),
@@ -863,12 +866,16 @@ async function closeEntry(sessionId, entryId, status) {
       updatedAt: serverTimestamp(),
       partnerPlayerId: null,
       partnerRequestToPlayerId: null,
+      partnerRequestGames: null,
+      partnerGamesRemaining: null,
     });
     if (existingClaim?.exists() && existingClaim.data().entryId === entryId) transaction.delete(claim);
     if (partnerEntry?.exists() && partnerEntry.data().partnerPlayerId === prior.playerId) {
       transaction.update(partnerEntry.ref, {
         partnerPlayerId: null,
         partnerRequestToPlayerId: null,
+        partnerRequestGames: null,
+        partnerGamesRemaining: null,
         updatedAt: serverTimestamp(),
       });
     }
@@ -933,6 +940,8 @@ export async function setEntryPartner(sessionId, entryId, partnerPlayerId = null
     if (previousPartnerEntry?.exists() && previousPartnerEntry.data().partnerPlayerId === prior.playerId) {
       transaction.update(previousPartnerEntry.ref, {
         partnerPlayerId: null,
+        partnerRequestGames: null,
+        partnerGamesRemaining: null,
         updatedAt: serverTimestamp(),
       });
     }
@@ -940,18 +949,24 @@ export async function setEntryPartner(sessionId, entryId, partnerPlayerId = null
         nextPartnerPrevious.data().partnerPlayerId === partnerId) {
       transaction.update(nextPartnerPrevious.ref, {
         partnerPlayerId: null,
+        partnerRequestGames: null,
+        partnerGamesRemaining: null,
         updatedAt: serverTimestamp(),
       });
     }
     transaction.update(eRef, {
       partnerPlayerId: partnerId,
       partnerRequestToPlayerId: null,
+      partnerRequestGames: null,
+      partnerGamesRemaining: partnerId ? null : null,
       updatedAt: serverTimestamp(),
     });
     if (nextPartnerEntry) {
       transaction.update(nextPartnerEntry.ref, {
         partnerPlayerId: prior.playerId,
         partnerRequestToPlayerId: null,
+        partnerRequestGames: null,
+        partnerGamesRemaining: null,
         updatedAt: serverTimestamp(),
       });
     }
@@ -964,6 +979,16 @@ function idOfPlayer(value) {
     throw error('Player id is invalid.');
   }
   return value.trim();
+}
+
+/** null = unlimited; otherwise 1–20 games together. */
+function normalizePartnerGames(value) {
+  if (value == null || value === '' || value === 'unlimited') return null;
+  const games = Number(value);
+  if (!Number.isInteger(games) || games < 1 || games > 20) {
+    throw error('Choose 1–20 games together, or unlimited.');
+  }
+  return games;
 }
 
 async function withContentionRetries(work) {
@@ -1283,12 +1308,16 @@ async function closeEntryAsClaimed(sessionId, entryId, user) {
       updatedAt: serverTimestamp(),
       partnerPlayerId: null,
       partnerRequestToPlayerId: null,
+      partnerRequestGames: null,
+      partnerGamesRemaining: null,
       playClaimUid: null,
     });
     transaction.delete(playClaimRef(sessionId, user.uid));
     if (partnerEntry?.exists() && partnerEntry.data().partnerPlayerId === prior.playerId) {
       transaction.update(partnerEntry.ref, {
         partnerPlayerId: null,
+        partnerRequestGames: null,
+        partnerGamesRemaining: null,
         updatedAt: serverTimestamp(),
       });
     }
@@ -1325,8 +1354,9 @@ async function requireClaimedEntry(transaction, sessionId, user) {
 }
 
 /** Player desk: ask another confirmed player to lock as doubles partners. Pending stays solo. */
-export async function requestPartner(sessionId, partnerPlayerId) {
+export async function requestPartner(sessionId, partnerPlayerId, gamesTogether = null) {
   const partnerId = idOfPlayer(partnerPlayerId);
+  const games = normalizePartnerGames(gamesTogether);
   const user = await ensurePublicAuth();
   if (!user.isAnonymous) throw error('Open the player desk link to manage pairing.', 'auth-required');
   await withContentionRetries(() => runTransaction(db, async (transaction) => {
@@ -1343,10 +1373,12 @@ export async function requestPartner(sessionId, partnerPlayerId) {
     }
     transaction.update(entryRef(sessionId, entryId), {
       partnerRequestToPlayerId: partnerId,
+      partnerRequestGames: games,
+      partnerGamesRemaining: null,
       updatedAt: serverTimestamp(),
     });
   }));
-  return { partnerRequestToPlayerId: partnerId };
+  return { partnerRequestToPlayerId: partnerId, partnerRequestGames: games };
 }
 
 /** Player desk: cancel your outbound pair request. */
@@ -1356,6 +1388,7 @@ export async function cancelPartnerRequest(sessionId) {
     const { entryId } = await requireClaimedEntry(transaction, sessionId, user);
     transaction.update(entryRef(sessionId, entryId), {
       partnerRequestToPlayerId: null,
+      partnerRequestGames: null,
       updatedAt: serverTimestamp(),
     });
   });
@@ -1382,14 +1415,19 @@ export async function approvePartnerRequest(sessionId, requesterEntryId) {
     if (me.partnerPlayerId || them.partnerPlayerId) {
       throw error('One of you is already paired. Decline and stay solo, or unpair first.');
     }
+    const games = normalizePartnerGames(them.partnerRequestGames);
     transaction.update(theirRef, {
       partnerPlayerId: playerId,
       partnerRequestToPlayerId: null,
+      partnerRequestGames: null,
+      partnerGamesRemaining: games,
       updatedAt: serverTimestamp(),
     });
     transaction.update(entryRef(sessionId, entryId), {
       partnerPlayerId: them.playerId,
       partnerRequestToPlayerId: null,
+      partnerRequestGames: null,
+      partnerGamesRemaining: games,
       updatedAt: serverTimestamp(),
     });
   }));
@@ -1410,6 +1448,7 @@ export async function declinePartnerRequest(sessionId, requesterEntryId) {
     if (theirs.data().partnerRequestToPlayerId !== playerId) return;
     transaction.update(theirRef, {
       partnerRequestToPlayerId: null,
+      partnerRequestGames: null,
       updatedAt: serverTimestamp(),
     });
   });
@@ -1426,6 +1465,8 @@ export async function clearMyPartner(sessionId) {
     if (!me.partnerPlayerId) {
       transaction.update(entryRef(sessionId, entryId), {
         partnerRequestToPlayerId: null,
+        partnerRequestGames: null,
+        partnerGamesRemaining: null,
         updatedAt: serverTimestamp(),
       });
       return;
@@ -1434,11 +1475,15 @@ export async function clearMyPartner(sessionId) {
     transaction.update(entryRef(sessionId, entryId), {
       partnerPlayerId: null,
       partnerRequestToPlayerId: null,
+      partnerRequestGames: null,
+      partnerGamesRemaining: null,
       updatedAt: serverTimestamp(),
     });
     if (partner?.exists() && partner.data().partnerPlayerId === playerId) {
       transaction.update(partner.ref, {
         partnerPlayerId: null,
+        partnerRequestGames: null,
+        partnerGamesRemaining: null,
         updatedAt: serverTimestamp(),
       });
     }

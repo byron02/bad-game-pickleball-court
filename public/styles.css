@@ -497,6 +497,28 @@ input[type="datetime-local"].input {
   border-top: 0;
 }
 .play-pair .field-help { margin-bottom: 0; }
+.play-pair-duration { margin-top: 12px; }
+.play-pair-duration .field-label { margin: 0 0 8px; }
+.play-pair-duration-options {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+.play-pair-duration-chip {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 10px;
+  padding: 10px 8px;
+  font: inherit;
+  font-weight: 700;
+  color: var(--muted);
+  cursor: pointer;
+}
+.play-pair-duration-chip.active {
+  background: var(--navy);
+  border-color: var(--navy);
+  color: #fff;
+}
 .play-pair-actions { margin-top: 10px; }
 .play-pair-actions:empty { display: none; margin: 0; }
 .play-pair-results { max-height: 280px; margin-top: 8px; min-height: 0; }

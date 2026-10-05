@@ -59,47 +59,52 @@ service cloud.firestore {
         );
     }
 
-    function playerOwnAttendance(sessionId, entryId) {
+    function validPartnerGamesCount(value) {
+      return value == null || (value is int && value >= 1 && value <= 20);
+    }
+
+    function playerOwnAttendance() {
       let before = resource.data;
       let after = request.resource.data;
       let changed = after.diff(before).affectedKeys();
-      let afterSittingOut = after.get('sittingOut', false);
-      let afterPartnerId = after.get('partnerPlayerId', null);
-      let beforePartnerId = before.get('partnerPlayerId', null);
-      let afterPartnerRequest = after.get('partnerRequestToPlayerId', null);
       return anonymousPlayer() &&
         playerControlsEntry(before) &&
         changed.hasOnly([
           'checkedIn', 'checkedInAt', 'sittingOut', 'checkedOutAt',
           'status', 'updatedAt', 'partnerPlayerId', 'partnerRequestToPlayerId',
+          'partnerRequestGames', 'partnerGamesRemaining',
           'hasPlayPin', 'playClaimUid'
         ]) &&
         (
           (
             after.status == 'confirmed' &&
             after.checkedIn is bool &&
-            afterSittingOut is bool &&
-            (afterSittingOut == false || after.checkedIn == true) &&
+            after.get('sittingOut', false) is bool &&
+            (after.get('sittingOut', false) == false || after.checkedIn == true) &&
             after.get('playClaimUid', null) == before.get('playClaimUid', null) &&
             after.get('hasPlayPin', false) == before.get('hasPlayPin', false) &&
             (
-              !changed.hasAny(['partnerPlayerId', 'partnerRequestToPlayerId']) ||
+              !changed.hasAny(['partnerPlayerId', 'partnerRequestToPlayerId', 'partnerRequestGames', 'partnerGamesRemaining']) ||
               (
-                afterPartnerId == beforePartnerId &&
+                after.get('partnerPlayerId', null) == before.get('partnerPlayerId', null) &&
+                after.get('partnerGamesRemaining', null) == before.get('partnerGamesRemaining', null) &&
                 (
-                  afterPartnerRequest == null ||
-                  (afterPartnerRequest is string &&
-                    afterPartnerRequest != before.get('playerId', ''))
-                )
+                  after.get('partnerRequestToPlayerId', null) == null ||
+                  (after.get('partnerRequestToPlayerId', null) is string &&
+                    after.get('partnerRequestToPlayerId', null) != before.get('playerId', ''))
+                ) &&
+                validPartnerGamesCount(after.get('partnerRequestGames', null))
               )
             )
           ) ||
           (
             after.status == 'checked_out' &&
             after.checkedIn == false &&
-            afterSittingOut == false &&
-            afterPartnerId == null &&
-            afterPartnerRequest == null
+            after.get('sittingOut', false) == false &&
+            after.get('partnerPlayerId', null) == null &&
+            after.get('partnerRequestToPlayerId', null) == null &&
+            after.get('partnerRequestGames', null) == null &&
+            after.get('partnerGamesRemaining', null) == null
           )
         );
     }
@@ -134,10 +139,6 @@ service cloud.firestore {
       let after = request.resource.data;
       let changed = after.diff(before).affectedKeys();
       let myPlayerId = myPlayClaim(sessionId).playerId;
-      let beforePartnerId = before.get('partnerPlayerId', null);
-      let afterPartnerId = after.get('partnerPlayerId', null);
-      let beforePartnerRequest = before.get('partnerRequestToPlayerId', null);
-      let afterPartnerRequest = after.get('partnerRequestToPlayerId', null);
       return anonymousPlayer() &&
         hasMyPlayClaim(sessionId) &&
         myPlayerId is string &&
@@ -147,46 +148,55 @@ service cloud.firestore {
           (
             // Approve or decline an inbound request on the requester's entry.
             entryId != myPlayClaim(sessionId).entryId &&
-            beforePartnerRequest == myPlayerId &&
+            before.get('partnerRequestToPlayerId', null) == myPlayerId &&
             (
               (
-                changed.hasOnly(['partnerRequestToPlayerId', 'updatedAt']) &&
-                afterPartnerRequest == null
+                changed.hasOnly(['partnerRequestToPlayerId', 'partnerRequestGames', 'updatedAt']) &&
+                after.get('partnerRequestToPlayerId', null) == null &&
+                after.get('partnerRequestGames', null) == null
               ) ||
               (
-                changed.hasOnly(['partnerRequestToPlayerId', 'partnerPlayerId', 'updatedAt']) &&
-                afterPartnerRequest == null &&
-                afterPartnerId == myPlayerId
+                changed.hasOnly(['partnerRequestToPlayerId', 'partnerPlayerId', 'partnerRequestGames', 'partnerGamesRemaining', 'updatedAt']) &&
+                after.get('partnerRequestToPlayerId', null) == null &&
+                after.get('partnerRequestGames', null) == null &&
+                after.get('partnerPlayerId', null) == myPlayerId &&
+                validPartnerGamesCount(after.get('partnerGamesRemaining', null))
               )
             )
           ) ||
           (
             // Clear the other half when either partner unpairs.
             entryId != myPlayClaim(sessionId).entryId &&
-            beforePartnerId == myPlayerId &&
-            changed.hasOnly(['partnerPlayerId', 'updatedAt']) &&
-            afterPartnerId == null
+            before.get('partnerPlayerId', null) == myPlayerId &&
+            changed.hasOnly(['partnerPlayerId', 'partnerRequestGames', 'partnerGamesRemaining', 'updatedAt']) &&
+            after.get('partnerPlayerId', null) == null &&
+            after.get('partnerRequestGames', null) == null &&
+            after.get('partnerGamesRemaining', null) == null
           ) ||
           (
             // Own claimed entry: send/cancel request, accept mutual lock, or unpair self.
             entryId == myPlayClaim(sessionId).entryId &&
             playerControlsEntry(before) &&
-            changed.hasOnly(['partnerPlayerId', 'partnerRequestToPlayerId', 'updatedAt']) &&
+            changed.hasOnly(['partnerPlayerId', 'partnerRequestToPlayerId', 'partnerRequestGames', 'partnerGamesRemaining', 'updatedAt']) &&
             (
               (
-                afterPartnerId == beforePartnerId &&
+                after.get('partnerPlayerId', null) == before.get('partnerPlayerId', null) &&
+                after.get('partnerGamesRemaining', null) == before.get('partnerGamesRemaining', null) &&
                 (
-                  afterPartnerRequest == null ||
-                  (afterPartnerRequest is string &&
-                    afterPartnerRequest != myPlayerId)
-                )
+                  after.get('partnerRequestToPlayerId', null) == null ||
+                  (after.get('partnerRequestToPlayerId', null) is string &&
+                    after.get('partnerRequestToPlayerId', null) != myPlayerId)
+                ) &&
+                validPartnerGamesCount(after.get('partnerRequestGames', null))
               ) ||
               (
-                afterPartnerRequest == null &&
+                after.get('partnerRequestToPlayerId', null) == null &&
+                after.get('partnerRequestGames', null) == null &&
                 (
-                  afterPartnerId == null ||
-                  afterPartnerId is string
-                )
+                  after.get('partnerPlayerId', null) == null ||
+                  after.get('partnerPlayerId', null) is string
+                ) &&
+                validPartnerGamesCount(after.get('partnerGamesRemaining', null))
               )
             )
           )
@@ -370,7 +380,7 @@ service cloud.firestore {
             resource.data.status == 'confirmed');
         allow create: if organizer() || validPublicRequest(sessionId, entryId);
         allow update: if organizer() ||
-          playerOwnAttendance(sessionId, entryId) ||
+          playerOwnAttendance() ||
           playerPinClaimEntry(sessionId, entryId) ||
           playerPartnerUpdate(sessionId, entryId);
         allow delete: if false;
