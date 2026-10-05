@@ -44,7 +44,7 @@ test('signup approval, independent court start, and idempotent wins/losses',
     let dashboard = await signup.getAdminDashboard(date);
     assert.equal(dashboard.session.confirmedCount, 0);
     assert.equal(dashboard.entries.filter((entry) => entry.status === 'pending').length, 1);
-    await signup.approveEntry(firstSession.id, dashboard.entries[0].id);
+    await signup.approveEntry(firstSession.id, dashboard.entries[0].id, { skillLevel: 'advanced' });
 
     for (const [name, division] of [['Ana', 'woman'], ['Joemari', 'man'], ['Stef', 'man']]) {
       const ref = adminDb.collection('players').doc();
@@ -110,9 +110,13 @@ test('signup approval, independent court start, and idempotent wins/losses',
     dashboard = await signup.getAdminDashboard(date);
     assert.equal(dashboard.session.confirmedCount, 4, 'unreviewed signup does not take a spot');
     const caseyRequest = dashboard.entries.find((entry) => entry.name === 'Casey');
-    await signup.approveEntry(firstSession.id, caseyRequest.id);
+    await signup.approveEntry(firstSession.id, caseyRequest.id, { skillLevel: 'beginner' });
     dashboard = await signup.getAdminDashboard(date);
-    assert.equal(dashboard.entries.find((entry) => entry.name === 'Casey').status, 'waitlisted');
+    const casey = dashboard.entries.find((entry) => entry.name === 'Casey');
+    assert.equal(casey.status, 'waitlisted');
+    assert.equal(casey.skillLevel, 'beginner');
+    assert.equal((await adminDb.doc(`players/${casey.playerId}`).get()).data().skillLevel, 'beginner');
+    assert.equal((await adminDb.doc(`playerDirectory/${casey.playerId}`).get()).data().skillLevel, 'beginner');
     assert.equal(dashboard.session.confirmedCount, 4, 'the original four hold their reservations');
     assert.equal(dashboard.session.waitlistCount, 1);
     await signup.signOutOrganizer();
