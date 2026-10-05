@@ -52,6 +52,7 @@ function gameRef(sessionId, gameId) {
   return doc(db, 'sessions', idOf(sessionId, 'Session id'), 'games', idOf(gameId, 'Game id'));
 }
 function playerRef(id) { return doc(db, 'players', idOf(id, 'Player id')); }
+function directoryRef(id) { return doc(db, 'playerDirectory', idOf(id, 'Player id')); }
 function entryRef(sessionId, id) {
   return doc(db, 'sessions', idOf(sessionId, 'Session id'), 'entries', idOf(id, 'Entry id'));
 }
@@ -480,11 +481,20 @@ export async function completeCourtGame({ sessionId, gameId, winnerSide }) {
       const delta = recorded.statDeltas[ids[i]];
       const player = players[i].data();
       const entry = entries[i].data();
+      const wins = (player.wins || 0) + delta.wins;
+      const losses = (player.losses || 0) + delta.losses;
       transaction.update(playerRef(ids[i]), {
-        wins: (player.wins || 0) + delta.wins,
-        losses: (player.losses || 0) + delta.losses,
-        updatedAt: serverTimestamp(),
+        wins, losses, updatedAt: serverTimestamp(),
       });
+      transaction.set(directoryRef(ids[i]), {
+        name: player.name,
+        nameLower: player.nameLower || String(player.name || '').toLocaleLowerCase(),
+        skillLevel: player.skillLevel,
+        division: player.division || 'unspecified',
+        photoData: player.photoData || null,
+        wins,
+        losses,
+      }, { merge: true });
       transaction.update(entries[i].ref, {
         wins: (entry.wins || 0) + delta.wins,
         losses: (entry.losses || 0) + delta.losses,

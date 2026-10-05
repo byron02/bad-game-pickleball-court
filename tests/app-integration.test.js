@@ -95,6 +95,15 @@ test('signup approval, independent court start, and idempotent wins/losses',
       assert.equal(player.wins, 0);
       assert.equal(player.losses, 1);
     }
+    assert.equal((await adminDb.doc(`playerDirectory/${playerIds.Joemari}`).get()).data().wins, 1);
+    assert.equal((await adminDb.doc(`playerDirectory/${playerIds.Jina}`).get()).data().losses, 1);
+
+    await signup.signOutOrganizer();
+    const top = await signup.getTopPlayers({ limit: 5 });
+    assert.equal(top.players.length, 4);
+    assert.equal(top.players[0].wins, 1);
+    assert.ok(top.players.every((player) => player.wins + player.losses > 0));
+    await signup.signInOrganizer({ email, password });
 
     await signup.updatePlayer(playerIds.Jina, { skillLevel: 'intermediate' }, firstSession.id);
     const jinaEntry = dashboard.entries.find((entry) => entry.name === 'Jina');

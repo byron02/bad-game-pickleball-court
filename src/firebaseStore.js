@@ -283,6 +283,21 @@ export async function getPublicSession(sessionId) {
   return { session: normalizedSession(snapshot) };
 }
 
+function directoryPayload(player, overrides = {}) {
+  const name = overrides.name || player.name;
+  return {
+    name,
+    nameLower: overrides.nameLower || player.nameLower || String(name || '').toLocaleLowerCase(),
+    skillLevel: overrides.skillLevel || player.skillLevel,
+    division: overrides.division || player.division || 'unspecified',
+    photoData: Object.prototype.hasOwnProperty.call(overrides, 'photoData')
+      ? overrides.photoData
+      : (player.photoData || null),
+    wins: Number(Object.prototype.hasOwnProperty.call(overrides, 'wins') ? overrides.wins : (player.wins || 0)),
+    losses: Number(Object.prototype.hasOwnProperty.call(overrides, 'losses') ? overrides.losses : (player.losses || 0)),
+  };
+}
+
 export async function searchPlayers(text) {
   await ensurePublicAuth();
   const needle = String(text || '').trim().toLocaleLowerCase();
@@ -293,6 +308,22 @@ export async function searchPlayers(text) {
     startAt(needle), endAt(`${needle}\uf8ff`), limit(20),
   ));
   return { players: results.docs.map(normalizedPlayer) };
+}
+
+/** Public lifetime leaderboard from the approved directory. */
+export async function getTopPlayers({ limit: size = 5 } = {}) {
+  await ensurePublicAuth();
+  const capped = Math.min(Math.max(Number(size) || 5, 1), 10);
+  const results = await getDocs(query(
+    collection(db, 'playerDirectory'),
+    orderBy('wins', 'desc'),
+    limit(20),
+  ));
+  const players = results.docs
+    .map(normalizedPlayer)
+    .filter((player) => (player.wins + player.losses) > 0)
+    .slice(0, capped);
+  return { players };
 }
 
 export async function submitSignup({ sessionId, playerId = null, name, skillLevel, division = 'unspecified', photoData = null }) {
@@ -429,21 +460,11 @@ export async function approveEntry(sessionId, entryId) {
         createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
       };
       transaction.set(freshPlayer, profile);
-      transaction.set(directoryRef(freshPlayer.id), {
-        name: profile.name, nameLower: profile.nameLower,
-        skillLevel: profile.skillLevel, division: profile.division,
-        photoData: profile.photoData,
-      });
+      transaction.set(directoryRef(freshPlayer.id), directoryPayload(profile));
     } else if (request.photoData) {
       const photoData = validPhoto(request.photoData);
       transaction.update(existingPlayer, { photoData, updatedAt: serverTimestamp() });
-      transaction.set(directoryRef(freshPlayer.id), {
-        name: player.data().name,
-        nameLower: player.data().nameLower || player.data().name.toLocaleLowerCase(),
-        skillLevel: player.data().skillLevel,
-        division: player.data().division || 'unspecified',
-        photoData,
-      }, { merge: true });
+      transaction.set(directoryRef(freshPlayer.id), directoryPayload(player.data(), { photoData }), { merge: true });
     }
     transaction.set(claim, { entryId, createdAt: serverTimestamp() });
     transaction.update(eRef, {
@@ -607,13 +628,7 @@ export async function updatePlayer(playerId, changes, sessionId = null) {
       if (claim.exists()) entry = await transaction.get(entryRef(sessionId, claim.data().entryId));
     }
     transaction.update(reference, patch);
-    transaction.set(directoryRef(playerId), {
-      name: player.data().name,
-      nameLower: player.data().nameLower || player.data().name.toLocaleLowerCase(),
-      skillLevel: patch.skillLevel || player.data().skillLevel,
-      division: patch.division || player.data().division || 'unspecified',
-      photoData: player.data().photoData || null,
-    }, { merge: true });
+    transaction.set(directoryRef(playerId), directoryPayload(player.data(), patch), { merge: true });
     // Court eligibility is read from the active session entry. Keep that
     // snapshot aligned with an organizer's profile edit for this session.
     if (entry?.exists() && ['confirmed', 'waitlisted'].includes(entry.data().status)) {
