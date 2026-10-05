@@ -1,4 +1,4 @@
-import { getPublicSession, searchPlayers, submitSignup, watchMySignup } from '../src/firebaseStore.js';
+import { getPublicSession, getTopPlayers, searchPlayers, submitSignup, watchMySignup } from '../src/firebaseStore.js';
 
 const token = new URLSearchParams(location.search).get('token')?.trim();
 if (token) document.querySelector('.brand').href = `/join?token=${encodeURIComponent(token)}`;
@@ -6,7 +6,7 @@ const $ = (id) => document.getElementById(id);
 const elements = {
   alert: $('pageAlert'), sessionDate: $('sessionDate'), sessionState: $('sessionState'),
   joinTitle: $('joinTitle'), introCopy: $('introCopy'), sessionCard: $('sessionCard'),
-  howItWorks: $('howItWorks'), signupTitle: $('signupTitle'), signupIntro: $('signupIntro'),
+  howItWorks: $('howItWorks'), topPlayersList: $('topPlayersList'), signupTitle: $('signupTitle'), signupIntro: $('signupIntro'),
   missingLink: $('missingLinkPanel'),
   confirmed: $('confirmedCount'), capacity: $('capacityCount'), fill: $('capacityFill'),
   capacityNote: $('capacityNote'), waitlistCount: $('waitlistCount'), joinBody: $('joinBody'),
@@ -93,6 +93,49 @@ function avatar(player) {
   return node;
 }
 
+function recordText(player) {
+  const wins = Number(player.wins || 0);
+  const losses = Number(player.losses || 0);
+  return `${wins} ${wins === 1 ? 'win' : 'wins'} · ${losses} ${losses === 1 ? 'loss' : 'losses'}`;
+}
+
+function renderTopPlayers(players, message = '') {
+  if (!elements.topPlayersList) return;
+  elements.topPlayersList.replaceChildren();
+  if (!players.length) {
+    const empty = document.createElement('li');
+    empty.className = 'top-players-empty';
+    empty.textContent = message || 'Standings appear after match results are recorded.';
+    elements.topPlayersList.append(empty);
+    return;
+  }
+  players.forEach((player, index) => {
+    const item = document.createElement('li');
+    item.className = 'top-player';
+    const rank = document.createElement('span');
+    rank.className = 'top-player-rank';
+    rank.textContent = String(index + 1).padStart(2, '0');
+    const info = document.createElement('div');
+    info.className = 'top-player-info';
+    const name = document.createElement('strong');
+    name.textContent = player.name || 'Player';
+    const meta = document.createElement('small');
+    meta.textContent = [recordText(player), player.skillLevel].filter(Boolean).join(' · ');
+    info.append(name, meta);
+    item.append(rank, avatar(player), info);
+    elements.topPlayersList.append(item);
+  });
+}
+
+async function loadTopPlayers() {
+  try {
+    const { players = [] } = await getTopPlayers({ limit: 5 });
+    renderTopPlayers(players);
+  } catch {
+    renderTopPlayers([], 'Standings could not load right now.');
+  }
+}
+
 function renderResults(players, message = '') {
   elements.results.replaceChildren();
   if (!players.length) {
@@ -166,7 +209,17 @@ function showSuccess(entry) {
     paragraph.textContent = 'You are on the waitlist. The organizer can confirm your spot when one opens.';
   } else if (entry?.status === 'confirmed') {
     elements.successTitle.textContent = 'Your spot is confirmed';
-    paragraph.textContent = 'Your spot is confirmed. Please check in with the organizer when you arrive.';
+    paragraph.textContent = 'Your spot is confirmed. Open the player desk link to check in, sit out, or leave — only this phone can change your status.';
+    let play = elements.success.querySelector('[data-play-link]');
+    if (!play) {
+      play = document.createElement('a');
+      play.dataset.playLink = 'true';
+      play.className = 'button button-primary button-wide';
+      play.style.marginTop = '16px';
+      elements.success.append(play);
+    }
+    play.href = `/play?token=${encodeURIComponent(token || currentSession?.id || '')}`;
+    play.textContent = 'Open player desk';
   } else if (['rejected', 'removed', 'checked_out'].includes(entry?.status)) {
     elements.successTitle.textContent = 'Request closed';
     paragraph.textContent = 'The organizer did not confirm this signup. Please contact them if you think this was a mistake.';
@@ -290,10 +343,12 @@ if (!token) {
   elements.signupTitle.textContent = 'Ready for open play?';
   elements.signupIntro.textContent = 'Open the link your organizer shared to request a spot.';
   elements.missingLink.hidden = false;
+  loadTopPlayers();
 } else {
   try {
     const { session } = await getPublicSession(token);
     updateSession(session);
+    loadTopPlayers();
     await watchMySignup(session.id, (entryOrError) => {
       if (entryOrError instanceof Error) {
         showAlert(entryOrError.message);
@@ -306,5 +361,6 @@ if (!token) {
     elements.sessionDate.textContent = 'Session unavailable';
     setBadge('Unavailable', 'red');
     showAlert(error.message || 'This signup link is invalid or has expired. Ask the organizer for a new link.');
+    loadTopPlayers();
   }
 }

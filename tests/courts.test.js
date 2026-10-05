@@ -5,6 +5,7 @@ import {
   recordGameResult,
   validateCourtConfig,
   validateLineup,
+  courtPoolSummary,
 } from '../src/domain/courts.js';
 
 const player = (id, skill, gender, extra = {}) => ({
@@ -36,6 +37,10 @@ test('per-court skill rules allow advanced-only beside beginner/intermediate cou
     lineup: { sideA: ['a1', 'b1'], sideB: ['a3', 'a4'] },
     players,
   }).valid, false);
+  assert.deepEqual(courtPoolSummary({
+    players,
+    activeGames: [{ status: 'active', lineup: { sideA: ['a1', 'a2'], sideB: ['a3', 'a4'] } }],
+  }), { waiting: 4, onCourt: 4, checkedIn: 8 });
 });
 
 test('women, men, and mixed divisions constrain every team independently', () => {
@@ -109,6 +114,46 @@ test('confirmed reservations become eligible only after check-in', () => {
   assert.deepEqual(new Set(IDs(lineup)), new Set(['a', 'b', 'c', 'd']));
 });
 
+test('sitting out keeps a checked-in player reserved but out of draws', () => {
+  const players = [
+    player('a', 'beginner', 'woman'),
+    player('b', 'beginner', 'man'),
+    player('c', 'beginner', 'woman'),
+    player('d', 'beginner', 'man'),
+    player('resting', 'beginner', 'woman', { sittingOut: true, waitMinutes: 999 }),
+  ];
+  const lineup = proposeLineup({ court: court('court-1', ['beginner']), players, random: () => 0.5 });
+  assert.deepEqual(new Set(IDs(lineup)), new Set(['a', 'b', 'c', 'd']));
+  assert.equal(validateLineup({
+    court: court('court-1', ['beginner']),
+    lineup: { sideA: ['resting', 'a'], sideB: ['b', 'c'] },
+    players,
+  }).valid, false);
+  assert.deepEqual(courtPoolSummary({ players, activeGames: [] }), {
+    waiting: 4, onCourt: 0, checkedIn: 5,
+  });
+});
+
+test('pending partner requests do not lock doubles until both sides match', () => {
+  const players = [
+    player('me', 'intermediate', 'man', { waitMinutes: 40 }),
+    player('stef', 'intermediate', 'woman', { waitMinutes: 40 }),
+    player('a', 'intermediate', 'man', { waitMinutes: 10 }),
+    player('b', 'intermediate', 'woman', { waitMinutes: 10 }),
+  ];
+  const unlocked = proposeLineup({ court: court('court-1', ['intermediate']), players, random: () => 0.5 });
+  assert.ok(unlocked);
+  const locked = [
+    player('me', 'intermediate', 'man', { partnerId: 'stef', waitMinutes: 40 }),
+    player('stef', 'intermediate', 'woman', { partnerId: 'me', waitMinutes: 40 }),
+    player('a', 'intermediate', 'man', { waitMinutes: 10 }),
+    player('b', 'intermediate', 'woman', { waitMinutes: 10 }),
+  ];
+  const lineup = proposeLineup({ court: court('court-1', ['intermediate']), players: locked, random: () => 0.5 });
+  const withMe = lineup.sideA.includes('me') ? lineup.sideA : lineup.sideB;
+  assert.ok(withMe.includes('me') && withMe.includes('stef'));
+});
+
 test('a confirmed reservation with checkedIn true is eligible', () => {
   const players = [
     player('a', 'beginner', 'woman', { status: 'confirmed' }),
@@ -118,6 +163,21 @@ test('a confirmed reservation with checkedIn true is eligible', () => {
   assert.equal(validateLineup({
     court: singles, lineup: { sideA: ['a'], sideB: ['b'] }, players,
   }).valid, true);
+});
+
+test('locked doubles partners stay on the same side', () => {
+  const players = [
+    player('me', 'intermediate', 'man', { partnerId: 'stef', waitMinutes: 40 }),
+    player('stef', 'intermediate', 'woman', { partnerId: 'me', waitMinutes: 40 }),
+    player('a', 'intermediate', 'man', { waitMinutes: 10 }),
+    player('b', 'intermediate', 'woman', { waitMinutes: 10 }),
+    player('c', 'intermediate', 'man', { waitMinutes: 5 }),
+    player('d', 'intermediate', 'woman', { waitMinutes: 5 }),
+  ];
+  const lineup = proposeLineup({ court: court('court-1', ['intermediate']), players, random: () => 0.5 });
+  assert.ok(lineup);
+  const withMe = lineup.sideA.includes('me') ? lineup.sideA : lineup.sideB;
+  assert.ok(withMe.includes('me') && withMe.includes('stef'));
 });
 
 test('waiting longer and playing fewer games affect the proposed four', () => {
