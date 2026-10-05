@@ -283,6 +283,21 @@ export async function getPublicSession(sessionId) {
   return { session: normalizedSession(snapshot) };
 }
 
+function directoryPayload(player, overrides = {}) {
+  const name = overrides.name || player.name;
+  return {
+    name,
+    nameLower: overrides.nameLower || player.nameLower || String(name || '').toLocaleLowerCase(),
+    skillLevel: overrides.skillLevel || player.skillLevel,
+    division: overrides.division || player.division || 'unspecified',
+    photoData: Object.prototype.hasOwnProperty.call(overrides, 'photoData')
+      ? overrides.photoData
+      : (player.photoData || null),
+    wins: Number(Object.prototype.hasOwnProperty.call(overrides, 'wins') ? overrides.wins : (player.wins || 0)),
+    losses: Number(Object.prototype.hasOwnProperty.call(overrides, 'losses') ? overrides.losses : (player.losses || 0)),
+  };
+}
+
 export async function searchPlayers(text) {
   await ensurePublicAuth();
   const needle = String(text || '').trim().toLocaleLowerCase();
@@ -293,6 +308,22 @@ export async function searchPlayers(text) {
     startAt(needle), endAt(`${needle}\uf8ff`), limit(20),
   ));
   return { players: results.docs.map(normalizedPlayer) };
+}
+
+/** Public lifetime leaderboard from the approved directory. */
+export async function getTopPlayers({ limit: size = 5 } = {}) {
+  await ensurePublicAuth();
+  const capped = Math.min(Math.max(Number(size) || 5, 1), 10);
+  const results = await getDocs(query(
+    collection(db, 'playerDirectory'),
+    orderBy('wins', 'desc'),
+    limit(20),
+  ));
+  const players = results.docs
+    .map(normalizedPlayer)
+    .filter((player) => (player.wins + player.losses) > 0)
+    .slice(0, capped);
+  return { players };
 }
 
 export async function submitSignup({ sessionId, playerId = null, name, skillLevel, division = 'unspecified', photoData = null }) {
@@ -400,7 +431,7 @@ export async function watchAdminDashboard(callback, date = todayManila()) {
   return () => { stopPointer(); stopSession(); stopEntries(); stopPlayers(); };
 }
 
-export async function approveEntry(sessionId, entryId) {
+export async function approveEntry(sessionId, entryId, options = {}) {
   await ensureOrganizer();
   const result = await runTransaction(db, async (transaction) => {
     const sRef = sessionRef(sessionId);
@@ -409,6 +440,11 @@ export async function approveEntry(sessionId, entryId) {
     if (!session.exists() || !session.data().open) throw error('This session is closed.');
     if (!entry.exists() || entry.data().status !== 'pending') throw error('This request is no longer pending.');
     const request = entry.data();
+    const skillLevel = validSkill(
+      Object.prototype.hasOwnProperty.call(options, 'skillLevel')
+        ? options.skillLevel
+        : request.skillLevel,
+    );
     const existingPlayer = request.playerId ? playerRef(request.playerId) : null;
     const freshPlayer = existingPlayer || doc(collection(db, 'players'));
     const player = existingPlayer ? await transaction.get(existingPlayer) : null;
@@ -423,31 +459,25 @@ export async function approveEntry(sessionId, entryId) {
     if (!existingPlayer) {
       const name = validName(request.name);
       const profile = {
-        name, nameLower: name.toLocaleLowerCase(), skillLevel: validSkill(request.skillLevel),
+        name, nameLower: name.toLocaleLowerCase(), skillLevel,
         division: validDivision(request.division),
         photoData: validPhoto(request.photoData), active: true, wins: 0, losses: 0,
         createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
       };
       transaction.set(freshPlayer, profile);
-      transaction.set(directoryRef(freshPlayer.id), {
-        name: profile.name, nameLower: profile.nameLower,
-        skillLevel: profile.skillLevel, division: profile.division,
-        photoData: profile.photoData,
-      });
-    } else if (request.photoData) {
-      const photoData = validPhoto(request.photoData);
-      transaction.update(existingPlayer, { photoData, updatedAt: serverTimestamp() });
-      transaction.set(directoryRef(freshPlayer.id), {
-        name: player.data().name,
-        nameLower: player.data().nameLower || player.data().name.toLocaleLowerCase(),
-        skillLevel: player.data().skillLevel,
-        division: player.data().division || 'unspecified',
-        photoData,
-      }, { merge: true });
+      transaction.set(directoryRef(freshPlayer.id), directoryPayload(profile));
+    } else {
+      const photoData = request.photoData ? validPhoto(request.photoData) : player.data().photoData || null;
+      const playerPatch = { skillLevel, updatedAt: serverTimestamp() };
+      if (request.photoData) playerPatch.photoData = photoData;
+      transaction.update(existingPlayer, playerPatch);
+      transaction.set(directoryRef(freshPlayer.id), directoryPayload(player.data(), {
+        skillLevel, photoData,
+      }), { merge: true });
     }
     transaction.set(claim, { entryId, createdAt: serverTimestamp() });
     transaction.update(eRef, {
-      playerId: freshPlayer.id, status, approvedAt: serverTimestamp(),
+      playerId: freshPlayer.id, status, skillLevel, approvedAt: serverTimestamp(),
       reviewedAt: serverTimestamp(), updatedAt: serverTimestamp(),
     });
     transaction.update(sRef, {
@@ -455,7 +485,7 @@ export async function approveEntry(sessionId, entryId) {
       waitlistCount: (session.data().waitlistCount || 0) + (confirmed ? 0 : 1),
       updatedAt: serverTimestamp(),
     });
-    return { status, playerId: freshPlayer.id };
+    return { status, playerId: freshPlayer.id, skillLevel };
   });
   return result;
 }
@@ -607,13 +637,7 @@ export async function updatePlayer(playerId, changes, sessionId = null) {
       if (claim.exists()) entry = await transaction.get(entryRef(sessionId, claim.data().entryId));
     }
     transaction.update(reference, patch);
-    transaction.set(directoryRef(playerId), {
-      name: player.data().name,
-      nameLower: player.data().nameLower || player.data().name.toLocaleLowerCase(),
-      skillLevel: patch.skillLevel || player.data().skillLevel,
-      division: patch.division || player.data().division || 'unspecified',
-      photoData: player.data().photoData || null,
-    }, { merge: true });
+    transaction.set(directoryRef(playerId), directoryPayload(player.data(), patch), { merge: true });
     // Court eligibility is read from the active session entry. Keep that
     // snapshot aligned with an organizer's profile edit for this session.
     if (entry?.exists() && ['confirmed', 'waitlisted'].includes(entry.data().status)) {

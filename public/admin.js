@@ -18,6 +18,7 @@ const ui = {
   directorySearch: $('directorySearch'), directoryList: $('directoryList'), shareLink: $('shareLinkText'),
   copyLink: $('copyLinkButton'), copyLinkSecondary: $('copyLinkSecondary'), refresh: $('refreshButton'),
   reset: $('resetButton'), resetDialog: $('resetDialog'), resetForm: $('resetForm'), resetConfirm: $('resetConfirm'), cancelReset: $('cancelReset'),
+  navPendingPill: $('navPendingPill'), mobilePendingPill: $('mobilePendingPill'),
 };
 
 let session = null;
@@ -26,6 +27,10 @@ let players = [];
 let selectedDate = null;
 let unsubscribeDashboard = null;
 let activeShareLink = '';
+let currentView = 'overview';
+const pendingSkillByEntry = new Map();
+const SKILL_LEVELS = ['beginner', 'intermediate', 'advanced'];
+const VIEWS = ['overview', 'requests', 'roster', 'directory', 'courts'];
 
 function showAlert(message, type = 'error') {
   ui.alert.textContent = message;
@@ -103,6 +108,52 @@ function recordLabel(player) {
   return `${wins} ${wins === 1 ? 'win' : 'wins'} · ${losses} ${losses === 1 ? 'loss' : 'losses'}`;
 }
 
+function skillSelect(entryId, current) {
+  const label = node('label', 'entry-skill');
+  label.append(node('span', '', 'Set skill level'));
+  const select = document.createElement('select');
+  select.className = 'input entry-skill-select';
+  select.dataset.skillFor = entryId;
+  select.setAttribute('aria-label', 'Set skill level');
+  const selected = pendingSkillByEntry.get(entryId) || current || 'beginner';
+  for (const level of SKILL_LEVELS) {
+    const option = document.createElement('option');
+    option.value = level;
+    option.textContent = level.charAt(0).toUpperCase() + level.slice(1);
+    if (level === selected) option.selected = true;
+    select.append(option);
+  }
+  select.addEventListener('change', () => {
+    pendingSkillByEntry.set(entryId, select.value);
+  });
+  label.append(select);
+  return label;
+}
+
+function showView(name, { updateHash = true } = {}) {
+  const view = VIEWS.includes(name) ? name : 'overview';
+  currentView = view;
+  document.querySelectorAll('.admin-view').forEach((section) => {
+    section.hidden = section.dataset.view !== view;
+  });
+  document.querySelectorAll('.web-nav a[data-view], .mobile-nav button[data-view]').forEach((item) => {
+    item.classList.toggle('current', item.dataset.view === view);
+  });
+  if (updateHash) {
+    const nextHash = `#${view}`;
+    if (location.hash !== nextHash) history.replaceState(null, '', nextHash);
+  }
+  window.scrollTo(0, 0);
+}
+
+function syncPendingBadges(count) {
+  for (const pill of [ui.navPendingPill, ui.mobilePendingPill]) {
+    if (!pill) continue;
+    pill.textContent = String(count);
+    pill.hidden = count < 1;
+  }
+}
+
 function renderEntry(entry, kind) {
   const row = node('article', 'entry-row');
   row.append(avatar(entry));
@@ -113,10 +164,17 @@ function renderEntry(entry, kind) {
   if (kind === 'confirmed') top.append(statusBadge(entry.checkedIn ? 'Checked in' : 'Reserved', entry.checkedIn ? 'green' : 'blue'));
   if (kind === 'waitlist') top.append(statusBadge('Waitlist', 'amber'));
   body.append(top);
-  const details = [entry.skillLevel || 'Skill not set'];
-  if (entry.division && entry.division !== 'unspecified') details.push(entry.division);
-  if (kind === 'pending') details.push('Organizer review required');
-  body.append(node('div', 'entry-meta', details.join(' · ')));
+  if (kind === 'pending') {
+    body.append(skillSelect(entry.id, entry.skillLevel));
+    const details = [];
+    if (entry.division && entry.division !== 'unspecified') details.push(entry.division);
+    details.push('Change skill if needed, then approve');
+    body.append(node('div', 'entry-meta', details.join(' · ')));
+  } else {
+    const details = [entry.skillLevel || 'Skill not set'];
+    if (entry.division && entry.division !== 'unspecified') details.push(entry.division);
+    body.append(node('div', 'entry-meta', details.join(' · ')));
+  }
   const actions = node('div', 'entry-actions');
   if (kind === 'pending') {
     actions.append(actionButton('Approve', 'approve', entry.id, 'button-primary'));
@@ -133,12 +191,19 @@ function renderEntry(entry, kind) {
 }
 
 function renderList(container, items, kind, emptyMessage) {
+  const active = document.activeElement;
+  const focusedSkillId = kind === 'pending' && active?.matches?.('select[data-skill-for]')
+    ? active.dataset.skillFor
+    : null;
   container.replaceChildren();
   if (!items.length) {
     container.append(node('p', 'panel-empty', emptyMessage));
     return;
   }
   for (const entry of items) container.append(renderEntry(entry, kind));
+  if (focusedSkillId) {
+    container.querySelector(`select[data-skill-for="${CSS.escape(focusedSkillId)}"]`)?.focus();
+  }
 }
 
 function renderDirectory() {
@@ -183,6 +248,10 @@ function renderDashboard(data) {
   const pending = entries.filter((entry) => entry.status === 'pending');
   const confirmed = entries.filter((entry) => entry.status === 'confirmed');
   const waitlist = entries.filter((entry) => ['waitlist', 'waitlisted'].includes(entry.status));
+  const pendingIds = new Set(pending.map((entry) => entry.id));
+  for (const entryId of [...pendingSkillByEntry.keys()]) {
+    if (!pendingIds.has(entryId)) pendingSkillByEntry.delete(entryId);
+  }
   const confirmedCount = Number(session.confirmedCount ?? confirmed.length);
   const checkedInCount = Number(session.checkedInCount ?? confirmed.filter((entry) => entry.checkedIn).length);
   const pendingCount = Number(session.pendingCount ?? pending.length);
@@ -200,6 +269,7 @@ function renderDashboard(data) {
   ui.open.textContent = String(open);
   ui.pendingCount.textContent = String(pendingCount);
   ui.waitlistCount.textContent = String(waitlistCount);
+  syncPendingBadges(pendingCount);
   renderList(ui.pendingList, pending, 'pending', 'No signup requests to review.');
   renderList(ui.confirmedList, confirmed, 'confirmed', 'No reserved players yet. Share the signup link or add a known player.');
   renderList(ui.waitlistList, waitlist, 'waitlist', 'No players on the waitlist.');
@@ -218,6 +288,9 @@ async function beginDashboard(date) {
   ui.dashboard.hidden = false;
   ui.signOut.hidden = false;
   renderDashboard(snapshot);
+  const hashView = location.hash.replace(/^#/, '');
+  const pendingCount = snapshot.entries.filter((entry) => entry.status === 'pending').length;
+  showView(VIEWS.includes(hashView) ? hashView : (pendingCount > 0 ? 'requests' : 'overview'));
   await courtUI.refresh(session.id);
   unsubscribeDashboard?.();
   unsubscribeDashboard = await watchAdminDashboard((next) => renderDashboard(next), date);
@@ -260,7 +333,14 @@ async function runEntryAction(action, entryId, button) {
   }
   button.disabled = true;
   try {
-    await fn(session.id, entryId);
+    if (action === 'approve') {
+      const skillSelect = button.closest('.entry-row')?.querySelector('select[data-skill-for]');
+      const skillLevel = skillSelect?.value || pendingSkillByEntry.get(entryId);
+      await approveEntry(session.id, entryId, skillLevel ? { skillLevel } : {});
+      pendingSkillByEntry.delete(entryId);
+    } else {
+      await fn(session.id, entryId);
+    }
     await refreshDashboard();
     showAlert('Session updated.', 'success');
   } catch (error) {
@@ -413,6 +493,22 @@ ui.signOut.addEventListener('click', async () => {
   } catch (error) {
     showAlert(friendlyError(error));
   }
+});
+
+document.querySelector('.web-nav')?.addEventListener('click', (event) => {
+  const link = event.target.closest('a[data-view]');
+  if (!link) return;
+  event.preventDefault();
+  showView(link.dataset.view);
+});
+document.querySelector('.mobile-nav')?.addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-view]');
+  if (!button) return;
+  showView(button.dataset.view);
+});
+window.addEventListener('hashchange', () => {
+  const hashView = location.hash.replace(/^#/, '');
+  if (VIEWS.includes(hashView) && hashView !== currentView) showView(hashView, { updateHash: false });
 });
 
 const slowLoading = setTimeout(() => {
