@@ -25,9 +25,9 @@
     <section id="authPanel" class="auth-panel" hidden>
       <span class="eyebrow">Organizer access</span>
       <h1>Sign in as organizer</h1>
-      <p>Use your approved organizer account to manage today's signups and player list.</p>
-      <form id="authForm"><label class="field-label" for="adminEmail">Email</label><input id="adminEmail" class="input" type="email" autocomplete="email" required><label class="field-label" for="adminPassword">Password</label><input id="adminPassword" class="input" type="password" autocomplete="current-password" required><button class="button button-primary" type="submit">Sign in</button></form>
-      <button id="googleSignInButton" class="button button-outline button-wide google-button" type="button">Continue with Google</button>
+      <p>Use your approved Google account to manage signups, courts, and results.</p>
+      <button id="googleSignInButton" class="button button-primary button-wide google-button" type="button">Continue with Google</button>
+      <details class="alternate-auth"><summary>Use email and password</summary><form id="authForm"><label class="field-label" for="adminEmail">Email</label><input id="adminEmail" class="input" type="email" autocomplete="email" required><label class="field-label" for="adminPassword">Password</label><input id="adminPassword" class="input" type="password" autocomplete="current-password" required><button class="button button-outline" type="submit">Sign in</button></form></details>
     </section>
 
     <div id="dashboard" hidden>

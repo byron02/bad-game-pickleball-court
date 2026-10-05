@@ -99,6 +99,7 @@ test('signup approval, independent court start, and idempotent wins/losses',
     await signup.updatePlayer(playerIds.Jina, { skillLevel: 'intermediate' }, firstSession.id);
     const jinaEntry = dashboard.entries.find((entry) => entry.name === 'Jina');
     assert.equal((await adminDb.doc(`sessions/${firstSession.id}/entries/${jinaEntry.id}`).get()).data().skillLevel, 'intermediate');
+    assert.equal((await adminDb.doc(`playerDirectory/${playerIds.Jina}`).get()).data().skillLevel, 'intermediate');
 
     await signup.signOutOrganizer();
     await signup.submitSignup({
@@ -114,6 +115,12 @@ test('signup approval, independent court start, and idempotent wins/losses',
     assert.equal(dashboard.entries.find((entry) => entry.name === 'Casey').status, 'waitlisted');
     assert.equal(dashboard.session.confirmedCount, 4, 'the original four hold their reservations');
     assert.equal(dashboard.session.waitlistCount, 1);
+    await signup.signOutOrganizer();
+    const search = await signup.searchPlayers('cas');
+    assert.equal(search.players.length, 1);
+    assert.equal(search.players[0].name, 'Casey');
+    await signup.signOutOrganizer();
+    await signup.signInOrganizer({ email, password });
     await signup.checkOutEntry(firstSession.id, jinaEntry.id);
     dashboard = await signup.getAdminDashboard(date);
     assert.equal(dashboard.entries.find((entry) => entry.name === 'Casey').status, 'confirmed');

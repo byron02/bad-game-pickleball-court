@@ -8,6 +8,8 @@
     "dev": "npm run build && firebase emulators:start --only hosting,auth,firestore",
     "test": "node --test",
     "deploy": "npm run build && firebase deploy --only hosting,firestore",
+    "deploy:hosting": "npm run build && firebase deploy --only hosting",
+    "deploy:rules": "node scripts/deploy-firestore-rules.mjs",
     "bootstrap:organizer": "node scripts/bootstrap-organizer.mjs"
   },
   "dependencies": {

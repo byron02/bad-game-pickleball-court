@@ -114,6 +114,15 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Public search exposes a small approved directory. The full player
+    // profile, including lifetime match statistics, stays organizer-managed.
+    match /playerDirectory/{playerId} {
+      allow get: if anonymousPlayer();
+      allow list: if anonymousPlayer() && request.query.limit != null &&
+        request.query.limit <= 20;
+      allow create, update, delete: if organizer();
+    }
+
     match /sessions/{sessionId} {
       // A random document ID is the share token. Public clients cannot list
       // sessions or discover a token from the day index.

@@ -6,6 +6,7 @@ A responsive web app for organizer-run open play. Players request a place from a
 
 - Daily session with an adjustable player limit (32 by default). Approved reservations hold spots before check-in. Later approvals go to a waitlist; a removed or checked-out reservation promotes the oldest waitlisted player.
 - Public signup for an existing player profile or a new profile with name, skill level, division eligibility, and optional photo. All public requests require organizer approval. Existing-profile claims are also reviewed.
+- Approved profiles appear in a limited public search directory; full player records stay in the organizer database.
 - Organizer check-in, check-out, rejection, removal, directory search, profile editing, and daily reset. Reset preserves player profiles and past results and creates a new signup link.
 - Reusable courts with separate skill eligibility, open/mixed/women/men divisions, and singles/doubles format. Each court can draw and start independently. One player cannot be on two active courts.
 - Winner recording adds one win to each winner and one loss to each opponent. Results can be saved only once. The dashboard shows player records and recent results.
@@ -52,4 +53,6 @@ npm run deploy
 
 This builds the two web pages and deploys Hosting plus Firestore rules and indexes. The expected Hosting address is `https://bad-game-pickleball.web.app`; Firebase confirms the address after a successful deploy. Share the exact signup link shown in the organizer dashboard for each daily session.
 
-The current signed-in CLI account must have project access. A Firebase web config or private service account file alone does not grant Hosting deployment permission.
+The signed-in CLI account or service account must have project access. The Firebase web config identifies the app but does not grant deployment permission.
+
+If you deploy with a service account that can publish Hosting and rules but cannot create indexes, this version needs no composite indexes. In PowerShell, point `GOOGLE_APPLICATION_CREDENTIALS` at the private JSON file and set `XDG_CONFIG_HOME` to an empty local directory to keep the Firebase CLI from choosing a different signed-in account. Then run `npm run deploy:rules` and `npm run deploy:hosting` separately. Never commit the JSON file.

@@ -116,6 +116,7 @@ function validPhoto(value) {
 function sessionRef(sessionId) { initializeClient(); return doc(db, 'sessions', sessionId); }
 function dayRef(date) { initializeClient(); return doc(db, 'daySessions', date); }
 function playerRef(playerId) { initializeClient(); return doc(db, 'players', playerId); }
+function directoryRef(playerId) { initializeClient(); return doc(db, 'playerDirectory', playerId); }
 function entryRef(sessionId, entryId) { initializeClient(); return doc(db, 'sessions', sessionId, 'entries', entryId); }
 function claimRef(sessionId, playerId) { initializeClient(); return doc(db, 'sessions', sessionId, 'playerClaims', playerId); }
 function playerLockRef(sessionId, playerId) { initializeClient(); return doc(db, 'sessions', sessionId, 'playerLocks', playerId); }
@@ -284,8 +285,7 @@ export async function searchPlayers(text) {
   const needle = String(text || '').trim().toLocaleLowerCase();
   if (needle.length < 2) return { players: [] };
   const results = await getDocs(query(
-    collection(db, 'players'),
-    where('active', '==', true),
+    collection(db, 'playerDirectory'),
     orderBy('nameLower'),
     startAt(needle), endAt(`${needle}\uf8ff`), limit(20),
   ));
@@ -419,14 +419,28 @@ export async function approveEntry(sessionId, entryId) {
     const status = confirmed ? 'confirmed' : 'waitlisted';
     if (!existingPlayer) {
       const name = validName(request.name);
-      transaction.set(freshPlayer, {
+      const profile = {
         name, nameLower: name.toLocaleLowerCase(), skillLevel: validSkill(request.skillLevel),
         division: validDivision(request.division),
         photoData: validPhoto(request.photoData), active: true, wins: 0, losses: 0,
         createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+      };
+      transaction.set(freshPlayer, profile);
+      transaction.set(directoryRef(freshPlayer.id), {
+        name: profile.name, nameLower: profile.nameLower,
+        skillLevel: profile.skillLevel, division: profile.division,
+        photoData: profile.photoData,
       });
     } else if (request.photoData) {
-      transaction.update(existingPlayer, { photoData: validPhoto(request.photoData), updatedAt: serverTimestamp() });
+      const photoData = validPhoto(request.photoData);
+      transaction.update(existingPlayer, { photoData, updatedAt: serverTimestamp() });
+      transaction.set(directoryRef(freshPlayer.id), {
+        name: player.data().name,
+        nameLower: player.data().nameLower || player.data().name.toLocaleLowerCase(),
+        skillLevel: player.data().skillLevel,
+        division: player.data().division || 'unspecified',
+        photoData,
+      }, { merge: true });
     }
     transaction.set(claim, { entryId, createdAt: serverTimestamp() });
     transaction.update(eRef, {
@@ -446,11 +460,10 @@ export async function approveEntry(sessionId, entryId) {
 async function promoteOldest(sessionId) {
   for (let attempts = 0; attempts < 5; attempts += 1) {
     const candidates = await getDocs(query(
-      collection(db, 'sessions', sessionId, 'entries'),
-      where('status', '==', 'waitlisted'), orderBy('createdAt', 'asc'), limit(1),
+      collection(db, 'sessions', sessionId, 'entries'), orderBy('createdAt', 'asc'),
     ));
-    if (candidates.empty) return null;
-    const candidate = candidates.docs[0];
+    const candidate = candidates.docs.find((item) => item.data().status === 'waitlisted');
+    if (!candidate) return null;
     try {
       return await runTransaction(db, async (transaction) => {
         const sRef = sessionRef(sessionId);
@@ -591,6 +604,13 @@ export async function updatePlayer(playerId, changes, sessionId = null) {
       if (claim.exists()) entry = await transaction.get(entryRef(sessionId, claim.data().entryId));
     }
     transaction.update(reference, patch);
+    transaction.set(directoryRef(playerId), {
+      name: player.data().name,
+      nameLower: player.data().nameLower || player.data().name.toLocaleLowerCase(),
+      skillLevel: patch.skillLevel || player.data().skillLevel,
+      division: patch.division || player.data().division || 'unspecified',
+      photoData: player.data().photoData || null,
+    }, { merge: true });
     // Court eligibility is read from the active session entry. Keep that
     // snapshot aligned with an organizer's profile edit for this session.
     if (entry?.exists() && ['confirmed', 'waitlisted'].includes(entry.data().status)) {

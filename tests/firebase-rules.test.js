@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebase/rules-unit-testing';
 import {
-  collection, doc, getDoc, getDocs, limit, orderBy, query, serverTimestamp,
-  setDoc, updateDoc, where,
+  collection, doc, endAt, getDoc, getDocs, limit, orderBy, query, serverTimestamp,
+  setDoc, startAt, updateDoc,
 } from 'firebase/firestore';
 
 // Run with:
@@ -109,20 +109,28 @@ test('organizer can approve within capacity, but invalid aggregate counts are re
     await assertFails(updateDoc(session, { capacity: 20 }));
   });
 
-test('public search is limited to active players; session and entry lists stay private',
+test('public search reads only the approved directory; full profiles and sessions stay private',
   { skip: !enabled }, async () => {
     await env.withSecurityRulesDisabled(async (context) => {
       await setDoc(doc(context.firestore(), 'players', 'ana'), playerData);
       await setDoc(doc(context.firestore(), 'players', 'hidden'), {
         ...playerData, name: 'Hidden', nameLower: 'hidden', active: false,
       });
+      await setDoc(doc(context.firestore(), 'playerDirectory', 'ana'), {
+        name: 'Ana Cruz', nameLower: 'ana cruz', skillLevel: 'intermediate',
+        division: 'woman', photoData: null,
+      });
     });
     const db = env.authenticatedContext('player-three', anonymous).firestore();
     const found = await assertSucceeds(getDocs(query(
-      collection(db, 'players'), where('active', '==', true),
-      orderBy('nameLower'), limit(20),
+      collection(db, 'playerDirectory'), orderBy('nameLower'),
+      startAt('an'), endAt('an\uf8ff'), limit(20),
     )));
     assert.equal(found.docs.length, 1);
+    await assertFails(getDocs(collection(db, 'playerDirectory')));
+    await assertFails(setDoc(doc(db, 'playerDirectory', 'intruder'), {
+      name: 'Intruder', nameLower: 'intruder', skillLevel: 'advanced', division: 'man', photoData: null,
+    }));
     await assertFails(getDocs(collection(db, 'players')));
     await assertFails(getDocs(collection(db, 'sessions')));
     await assertFails(getDocs(collection(db, 'sessions', sessionId, 'entries')));
