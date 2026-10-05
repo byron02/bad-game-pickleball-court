@@ -95,7 +95,37 @@ export function initCourtsUI({ getSession, getEntries, showAlert, refreshRoster 
     return box;
   }
 
+  function updateCourtKpis() {
+    const waitingEl = $('courtWaitingMetric');
+    const playingEl = $('courtPlayingMetric');
+    const availableEl = $('courtAvailableMetric');
+    const availableNames = $('courtAvailableNames');
+    if (!waitingEl || !playingEl || !availableEl) return;
+
+    const sample = [...previews.values()].find((item) => item?.pool) || null;
+    const waiting = Number(sample?.pool?.waiting ?? 0);
+    const playing = Number(sample?.pool?.onCourt ?? 0);
+    const freeCourts = courts.filter((court) =>
+      !games.some((game) => game.courtId === court.id && game.status === 'active'));
+
+    waitingEl.textContent = String(waiting);
+    playingEl.textContent = String(playing);
+    availableEl.textContent = String(freeCourts.length);
+    if (availableNames) {
+      if (!courts.length) {
+        availableNames.textContent = 'Add a court to start assigning matches';
+      } else if (!freeCourts.length) {
+        availableNames.textContent = 'All courts are playing right now';
+      } else if (freeCourts.length === courts.length) {
+        availableNames.textContent = freeCourts.map((court) => court.name).join(', ');
+      } else {
+        availableNames.textContent = `Open: ${freeCourts.map((court) => court.name).join(', ')}`;
+      }
+    }
+  }
+
   function render() {
+    updateCourtKpis();
     grid.replaceChildren();
     if (!courts.length) {
       grid.append(el('p', 'panel-empty', 'Add Court 1 to set its skill levels and division. Each court can start separately.'));

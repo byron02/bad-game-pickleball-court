@@ -201,6 +201,25 @@
             <button id="addCourtButton" class="button button-primary" type="button">+ Add court</button>
           </div>
         </section>
+
+        <section class="metric-grid court-kpi-grid" aria-label="Court floor totals">
+          <article class="metric">
+            <span>Waiting</span>
+            <strong id="courtWaitingMetric">—</strong>
+            <small>Checked in, not on a court</small>
+          </article>
+          <article class="metric">
+            <span>Playing</span>
+            <strong id="courtPlayingMetric">—</strong>
+            <small>On court right now</small>
+          </article>
+          <article class="metric">
+            <span>Courts free</span>
+            <strong id="courtAvailableMetric">—</strong>
+            <small id="courtAvailableNames">Which courts can start next</small>
+          </article>
+        </section>
+
         <section class="panel courts-panel">
           <div id="courtGrid" class="court-grid" aria-live="polite"><p class="panel-empty">Loading courts…</p></div>
           <div class="history-block">

@@ -164,6 +164,7 @@ h1, h2, h3, p { margin: 0; }
 .hero-progress .capacity-track span { background: #fff; }
 .hero-progress strong { font-size: 13px; }
 .metric-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 17px 0 20px; }
+.court-kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .metric { display: flex; flex-direction: column; min-height: 108px; padding: 15px 17px; background: white; border: 1px solid var(--line); border-radius: 13px; }
 .metric span { color: var(--muted); font-size: 11px; font-weight: 750; }
 .metric strong { font-size: 29px; line-height: 1.1; margin-top: 7px; letter-spacing: -.04em; }
@@ -341,6 +342,7 @@ h1, h2, h3, p { margin: 0; }
   .admin-hero { align-items: stretch; flex-direction: column; gap: 18px; padding: 22px; }
   .hero-progress { flex: auto; }
   .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .court-kpi-grid { grid-template-columns: 1fr; }
   .admin-grid { grid-template-columns: 1fr; }
   .players-desk { grid-template-columns: 1fr; }
   .today-side-panel, .players-desk .fill-panel { position: static; }
