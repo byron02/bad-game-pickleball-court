@@ -310,6 +310,14 @@ export function initCourtsUI({ getSession, getEntries, showAlert, refreshRoster 
         const preview = await proposeCourtLineup({ sessionId, courtId: id });
         previews.set(id, preview);
         if (!preview.lineup) throw new Error('Not enough eligible checked-in players for this court.');
+      } else if (action === 'clear-draw') {
+        const existing = previews.get(id);
+        previews.set(id, {
+          lineup: null,
+          players: [],
+          pool: existing?.pool || { waiting: 0, onCourt: 0, eligible: 0, needed: 4 },
+        });
+        showAlert('Next-game draw cleared.', 'success');
       } else if (action === 'start') {
         const preview = previews.get(id);
         if (!preview?.lineup) throw new Error('Draw players first.');
