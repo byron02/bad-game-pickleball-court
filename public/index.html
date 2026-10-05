@@ -27,9 +27,9 @@
       <section class="intro-panel" aria-labelledby="joinTitle">
         <div class="eyebrow">Bad Game · Open play</div>
         <h1 id="joinTitle">Your next game starts here.</h1>
-        <p class="intro-copy">Pick your name from our player list, or make a new player profile. The organizer will review your request for today's session.</p>
+        <p id="introCopy" class="intro-copy">Pick your name from our player list, or make a new player profile. The organizer will review your request for today's session.</p>
 
-        <div class="session-card" aria-live="polite">
+        <div id="sessionCard" class="session-card" aria-live="polite">
           <div class="session-card-top">
             <div><span class="label-overline">Today's session</span><h2 id="sessionDate">Loading…</h2></div>
             <span id="sessionState" class="badge badge-neutral">Loading</span>
@@ -39,7 +39,7 @@
           <div class="capacity-footer"><span id="capacityNote">Checking availability…</span><span id="waitlistCount"></span></div>
         </div>
 
-        <div class="how-it-works">
+        <div id="howItWorks" class="how-it-works">
           <h2>How signups work</h2>
           <ol>
             <li><span>01</span><p>Send a request with your name and skill level.</p></li>
@@ -50,7 +50,12 @@
       </section>
 
       <section class="signup-card" aria-labelledby="signupTitle">
-        <div class="card-heading"><span class="eyebrow">Player signup</span><h2 id="signupTitle">I want to play today</h2><p>Choose how you'd like to join the list.</p></div>
+        <div class="card-heading"><span class="eyebrow">Player signup</span><h2 id="signupTitle">I want to play today</h2><p id="signupIntro">Choose how you'd like to join the list.</p></div>
+
+        <div id="missingLinkPanel" class="missing-link-panel" hidden>
+          <p>Ask the organizer for today's signup link in your group chat. Each session has its own link.</p>
+          <a class="button button-outline button-wide" href="/admin/">I'm the organizer</a>
+        </div>
 
         <div id="joinBody">
           <div class="tabs" role="tablist" aria-label="Player type">

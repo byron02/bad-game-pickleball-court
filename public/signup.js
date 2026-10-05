@@ -5,6 +5,9 @@ if (token) document.querySelector('.brand').href = `/join?token=${encodeURICompo
 const $ = (id) => document.getElementById(id);
 const elements = {
   alert: $('pageAlert'), sessionDate: $('sessionDate'), sessionState: $('sessionState'),
+  joinTitle: $('joinTitle'), introCopy: $('introCopy'), sessionCard: $('sessionCard'),
+  howItWorks: $('howItWorks'), signupTitle: $('signupTitle'), signupIntro: $('signupIntro'),
+  missingLink: $('missingLinkPanel'),
   confirmed: $('confirmedCount'), capacity: $('capacityCount'), fill: $('capacityFill'),
   capacityNote: $('capacityNote'), waitlistCount: $('waitlistCount'), joinBody: $('joinBody'),
   existingTab: $('existingTab'), newTab: $('newTab'), existingPanel: $('existingPanel'), newPanel: $('newPanel'),
@@ -280,9 +283,13 @@ elements.newForm.addEventListener('submit', async (event) => {
 });
 if (!token) {
   elements.joinBody.hidden = true;
-  elements.sessionDate.textContent = 'Signup link needed';
-  setBadge('Unavailable', 'red');
-  showAlert('This link is missing its session token. Ask the organizer to share the current signup link.');
+  elements.sessionCard.hidden = true;
+  elements.howItWorks.hidden = true;
+  elements.joinTitle.textContent = 'Get today’s signup link.';
+  elements.introCopy.textContent = 'The organizer shares a unique link in your group chat when reservations open.';
+  elements.signupTitle.textContent = 'Ready for open play?';
+  elements.signupIntro.textContent = 'Open the link your organizer shared to request a spot.';
+  elements.missingLink.hidden = false;
 } else {
   try {
     const { session } = await getPublicSession(token);

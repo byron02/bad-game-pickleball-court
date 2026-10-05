@@ -7,7 +7,8 @@ import { initCourtsUI } from './courts-ui.js';
 
 const $ = (id) => document.getElementById(id);
 const ui = {
-  alert: $('adminAlert'), auth: $('authPanel'), dashboard: $('dashboard'),
+  alert: $('adminAlert'), loading: $('loadingPanel'), loadingMessage: $('loadingMessage'),
+  reloadPage: $('reloadPageButton'), auth: $('authPanel'), dashboard: $('dashboard'),
   googleSignIn: $('googleSignInButton'), signOut: $('signOutButton'),
   sessionDate: $('sessionDateInput'), capacityInput: $('capacityInput'), settingsForm: $('settingsForm'),
   confirmed: $('adminConfirmed'), capacity: $('adminCapacity'), fill: $('adminCapacityFill'), availability: $('adminAvailability'),
@@ -212,6 +213,7 @@ function renderDashboard(data) {
 
 async function beginDashboard(date) {
   const snapshot = await getAdminDashboard(date);
+  ui.loading.hidden = true;
   ui.auth.hidden = true;
   ui.dashboard.hidden = false;
   ui.signOut.hidden = false;
@@ -225,6 +227,7 @@ async function beginDashboard(date) {
 function showAuth() {
   unsubscribeDashboard?.();
   unsubscribeDashboard = null;
+  ui.loading.hidden = true;
   ui.auth.hidden = false;
   ui.dashboard.hidden = true;
   ui.signOut.hidden = true;
@@ -401,6 +404,7 @@ ui.googleSignIn.addEventListener('click', async () => {
     ui.googleSignIn.disabled = false;
   }
 });
+ui.reloadPage.addEventListener('click', () => location.reload());
 ui.signOut.addEventListener('click', async () => {
   try {
     await signOutOrganizer();
@@ -411,9 +415,17 @@ ui.signOut.addEventListener('click', async () => {
   }
 });
 
+const slowLoading = setTimeout(() => {
+  if (!ui.loading.hidden) {
+    ui.loadingMessage.textContent = 'Still connecting to Firebase. Reload this page if it does not finish.';
+    ui.reloadPage.hidden = false;
+  }
+}, 12000);
 try {
   await beginDashboard();
 } catch (error) {
   showAuth();
   if (!String(error?.code || '').includes('auth-required')) showAlert(friendlyError(error));
+} finally {
+  clearTimeout(slowLoading);
 }

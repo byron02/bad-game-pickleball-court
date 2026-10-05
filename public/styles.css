@@ -219,6 +219,8 @@ h1, h2, h3, p { margin: 0; }
 .auth-panel form { margin-top: 25px; }
 .auth-panel form .button { margin-top: 15px; width: 100%; }
 .auth-panel .google-button { margin-top: 10px; }
+.auth-panel #reloadPageButton { margin-top: 20px; }
+.missing-link-panel p { color: var(--muted); font-size: 13px; line-height: 1.6; margin: 4px 0 20px; }
 .confirm-dialog { width: min(420px, calc(100% - 28px)); border: 1px solid var(--line); border-radius: 16px; padding: 24px; box-shadow: 0 25px 75px rgb(10 32 62 / 24%); color: var(--navy); }
 .confirm-dialog::backdrop { background: rgb(7 23 43 / 58%); }
 .dialog-icon { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; color: var(--red); background: var(--red-pale); font-weight: 900; margin-bottom: 12px; }

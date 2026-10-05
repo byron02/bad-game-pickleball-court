@@ -22,6 +22,12 @@
 
   <main class="shell admin-main">
     <div id="adminAlert" class="alert" role="alert" hidden></div>
+    <section id="loadingPanel" class="auth-panel" role="status">
+      <span class="eyebrow">Organizer desk</span>
+      <h1>Loading your dashboard…</h1>
+      <p id="loadingMessage">Checking your sign-in and today's session.</p>
+      <button id="reloadPageButton" class="button button-outline button-wide" type="button" hidden>Reload page</button>
+    </section>
     <section id="authPanel" class="auth-panel" hidden>
       <span class="eyebrow">Organizer access</span>
       <h1>Sign in as organizer</h1>
