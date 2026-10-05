@@ -178,11 +178,44 @@ h1, h2, h3, p { margin: 0; }
 .today-side-panel { position: sticky; top: 12px; }
 .today-side-panel .button-wide { margin-top: 16px; }
 .today-players-list, .roster-scroll-list { max-height: min(58vh, 560px); overflow: auto; }
-.players-desk .roster-full-list,
+.view-toggle {
+  display: inline-flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+.view-toggle .button[aria-pressed="true"] {
+  background: var(--blue);
+  color: white;
+  border-color: var(--blue);
+}
+.players-desk .roster-full-list[data-layout="grid"],
 .players-desk #waitlistList {
   max-height: none;
   overflow: visible;
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.players-desk .roster-full-list[data-layout="list"] {
+  max-height: none;
+  overflow: visible;
+  grid-template-columns: 1fr;
+}
+.players-desk .roster-full-list[data-layout="list"] .entry-row {
+  align-items: center;
+  padding: 10px 12px;
+}
+.players-desk .roster-full-list[data-layout="list"] .entry-actions {
+  margin-top: 0;
+}
+.players-desk .roster-full-list[data-layout="list"] .entry-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.players-desk .roster-full-list[data-layout="list"] .entry-top,
+.players-desk .roster-full-list[data-layout="list"] .entry-meta {
+  margin: 0;
 }
 .fill-panel { margin-top: 0; }
 .players-desk .fill-panel { position: static; }
@@ -363,7 +396,7 @@ h1, h2, h3, p { margin: 0; }
 .dialog-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 21px; }
 
 @media (max-width: 1100px) {
-  .players-desk .roster-full-list,
+  .players-desk .roster-full-list[data-layout="grid"],
   .players-desk #waitlistList,
   .players-desk .fill-list {
     grid-template-columns: repeat(2, minmax(0, 1fr));

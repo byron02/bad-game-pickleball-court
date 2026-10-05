@@ -20,8 +20,9 @@ const ui = {
   todayPlayersList: $('todayPlayersList'), todayWaitlistList: $('todayWaitlistList'),
   todayWaitlistCount: $('todayWaitlistCountLabel'), gotoPlayers: $('gotoPlayersButton'),
   rosterSearch: $('rosterSearch'), rosterFillList: $('rosterFillList'), fillSpotsNote: $('fillSpotsNote'),
-  confirmedPager: $('confirmedPager'), fillPager: $('fillPager'), waitlistPager: $('waitlistPager'),
+  fillPager: $('fillPager'), waitlistPager: $('waitlistPager'),
   directoryPager: $('directoryPager'),
+  confirmedViewGrid: $('confirmedViewGrid'), confirmedViewList: $('confirmedViewList'),
   directorySearch: $('directorySearch'), directoryList: $('directoryList'), shareLink: $('shareLinkText'),
   copyLink: $('copyLinkButton'), copyLinkSecondary: $('copyLinkSecondary'), refresh: $('refreshButton'),
   reset: $('resetButton'), resetDialog: $('resetDialog'), resetForm: $('resetForm'), resetConfirm: $('resetConfirm'), cancelReset: $('cancelReset'),
@@ -40,7 +41,21 @@ const pendingNameByEntry = new Map();
 const SKILL_LEVELS = ['beginner', 'intermediate', 'advanced'];
 const VIEWS = ['overview', 'requests', 'roster', 'directory', 'courts'];
 const PAGE_SIZE = 12;
-const listPages = { confirmed: 1, waitlist: 1, fill: 1, directory: 1 };
+const listPages = { waitlist: 1, fill: 1, directory: 1 };
+let confirmedLayout = localStorage.getItem('confirmedLayout') === 'list' ? 'list' : 'grid';
+
+function applyConfirmedLayout() {
+  if (!ui.confirmedList) return;
+  ui.confirmedList.dataset.layout = confirmedLayout;
+  if (ui.confirmedViewGrid) ui.confirmedViewGrid.setAttribute('aria-pressed', confirmedLayout === 'grid' ? 'true' : 'false');
+  if (ui.confirmedViewList) ui.confirmedViewList.setAttribute('aria-pressed', confirmedLayout === 'list' ? 'true' : 'false');
+}
+
+function setConfirmedLayout(layout) {
+  confirmedLayout = layout === 'list' ? 'list' : 'grid';
+  localStorage.setItem('confirmedLayout', confirmedLayout);
+  applyConfirmedLayout();
+}
 
 function showAlert(message, type = 'error') {
   ui.alert.textContent = message;
@@ -440,9 +455,8 @@ function renderDashboard(data) {
   if (ui.waitlistBlock) ui.waitlistBlock.hidden = waitlist.length === 0;
   syncPendingBadges(pendingCount);
   renderList(ui.pendingList, pending, 'pending', 'No signup requests to review.');
-  renderList(ui.confirmedList, confirmed, 'confirmed', 'No reserved players yet. Share the signup link or add a known player.', {
-    pageKey: 'confirmed', pager: ui.confirmedPager,
-  });
+  renderList(ui.confirmedList, confirmed, 'confirmed', 'No reserved players yet. Share the signup link or add a known player.');
+  applyConfirmedLayout();
   if (ui.waitlistList) {
     renderList(ui.waitlistList, waitlist, 'waitlist', 'No players on the waitlist.', {
       pageKey: 'waitlist', pager: ui.waitlistPager,
@@ -661,7 +675,7 @@ ui.directorySearch.addEventListener('input', () => {
   renderDirectory();
 });
 
-for (const pager of [ui.confirmedPager, ui.waitlistPager, ui.fillPager, ui.directoryPager]) {
+for (const pager of [ui.waitlistPager, ui.fillPager, ui.directoryPager]) {
   pager?.addEventListener('click', (event) => {
     const button = event.target.closest('button[data-action]');
     if (!button) return;
@@ -669,11 +683,15 @@ for (const pager of [ui.confirmedPager, ui.waitlistPager, ui.fillPager, ui.direc
     if (!Object.prototype.hasOwnProperty.call(listPages, key)) return;
     if (button.dataset.action === 'page-prev') listPages[key] = Math.max(1, listPages[key] - 1);
     if (button.dataset.action === 'page-next') listPages[key] += 1;
-    if (key === 'confirmed' || key === 'waitlist') renderDashboard({ session, entries, players });
+    if (key === 'waitlist') renderDashboard({ session, entries, players });
     else if (key === 'fill') renderFillList();
     else if (key === 'directory') renderDirectory();
   });
 }
+
+ui.confirmedViewGrid?.addEventListener('click', () => setConfirmedLayout('grid'));
+ui.confirmedViewList?.addEventListener('click', () => setConfirmedLayout('list'));
+applyConfirmedLayout();
 
 $('cancelPlayer').addEventListener('click', () => $('playerDialog').close());
 $('playerForm').addEventListener('submit', async (event) => {

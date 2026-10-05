@@ -156,9 +156,12 @@
                 <h2>Confirmed players</h2>
                 <p>Check in arrivals, or lock doubles partners so the draw keeps them together.</p>
               </div>
+              <div class="view-toggle" role="group" aria-label="Confirmed players layout">
+                <button id="confirmedViewGrid" class="button button-small button-outline" type="button" aria-pressed="true">Grid</button>
+                <button id="confirmedViewList" class="button button-small button-outline" type="button" aria-pressed="false">List</button>
+              </div>
             </div>
-            <div id="confirmedList" class="entry-list roster-full-list" aria-live="polite"></div>
-            <nav id="confirmedPager" class="list-pager" aria-label="Confirmed players pages" hidden></nav>
+            <div id="confirmedList" class="entry-list roster-full-list" data-layout="grid" aria-live="polite"></div>
             <div id="waitlistBlock" class="waitlist-block" hidden>
               <div class="list-subhead"><h3>Waitlist</h3><span id="waitlistCountLabel" class="count-pill">0</span></div>
               <div id="waitlistList" class="entry-list"></div>
