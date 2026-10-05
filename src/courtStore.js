@@ -16,6 +16,8 @@ import {
   recordGameResult,
   validateCourtConfig,
   validateLineup,
+  courtPoolSummary,
+  eligiblePlayersForCourt,
 } from './domain/courts.js';
 
 const app = getApps()[0] || initializeApp(firebaseConfig);
@@ -267,6 +269,12 @@ export async function proposeCourtLineup({ sessionId, courtId, random = Math.ran
   const roster = entries.docs.map((snapshot) => snapshot.data());
   const history = games.docs.map((snapshot) => ({ id: snapshot.id, ...snapshot.data() }));
   const players = statsFromGames(roster, history);
+  const pool = courtPoolSummary({ players, activeGames: history });
+  const eligible = eligiblePlayersForCourt({
+    court: { id: court.id, ...court.data() },
+    players,
+    activeGames: history,
+  });
   const lineup = proposeLineup({
     court: { id: court.id, ...court.data() },
     players,
@@ -274,6 +282,7 @@ export async function proposeCourtLineup({ sessionId, courtId, random = Math.ran
     random,
   });
   const selected = lineup ? new Set(idsOf(lineup)) : new Set();
+  const byId = new Map(players.map((player) => [player.id, player]));
   return {
     lineup,
     players: roster.filter((entry) => selected.has(entry.playerId)).map((entry) => ({
@@ -282,7 +291,13 @@ export async function proposeCourtLineup({ sessionId, courtId, random = Math.ran
       skillLevel: entry.skillLevel,
       division: entry.division || 'unspecified',
       photoUrl: entry.photoData || null,
+      gamesPlayed: byId.get(entry.playerId)?.gamesPlayed || 0,
     })),
+    pool: {
+      ...pool,
+      eligible: eligible.length,
+      needed: court.data().format === 'singles' ? 2 : 4,
+    },
   };
 }
 

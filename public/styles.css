@@ -227,6 +227,11 @@ h1, h2, h3, p { margin: 0; }
 .court-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 15px; }
 .court-actions .button { box-shadow: none; }
 .court-empty { color: var(--muted); font-size: 12px; margin-top: 18px; padding: 13px; background: white; border: 1px dashed #c8d7e5; border-radius: 9px; }
+.court-pool { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 14px; color: var(--muted); font-size: 11px; }
+.court-pool strong { color: var(--navy); font-weight: 800; }
+.court-next { margin-top: 12px; padding: 13px; background: white; border: 1px dashed #c8d7e5; border-radius: 9px; }
+.court-next-copy { margin: 6px 0 10px; color: var(--muted); font-size: 12px; }
+.court-last { margin-top: 12px; color: var(--muted); font-size: 11px; }
 .court-dialog { width: min(480px, calc(100% - 28px)); }
 .history-block { margin-top: 22px; border-top: 1px solid var(--line); padding-top: 17px; }
 .history-block h3 { font-size: 14px; margin-bottom: 10px; }
