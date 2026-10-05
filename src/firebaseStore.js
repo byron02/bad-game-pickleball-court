@@ -247,7 +247,12 @@ export function watchAuth(callback) {
 
 async function ensurePublicAuth() {
   const current = await authReady();
-  if (current) return current;
+  if (current?.isAnonymous) return current;
+  // Admin Google/password sessions share this Firebase app. Player desk and
+  // signup need an anonymous uid for PIN claims and attendance writes.
+  if (current && !current.isAnonymous) {
+    await signOut(auth);
+  }
   if (!publicAuthPromise) {
     publicAuthPromise = signInAnonymously(auth).then((result) => result.user)
       .finally(() => { publicAuthPromise = null; });
