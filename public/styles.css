@@ -129,6 +129,8 @@ input[type="datetime-local"].input {
 .tab { min-height: 39px; flex: 1; border: 0; background: none; border-radius: 8px; color: var(--muted); font-size: 12px; font-weight: 800; }
 .tab.active { color: var(--blue); background: white; box-shadow: 0 1px 5px rgb(18 55 95 / 12%); }
 .search-results { min-height: 136px; max-height: 248px; overflow: auto; margin: 14px 0 12px; border: 1px solid var(--line); border-radius: 10px; }
+.search-results[hidden] { display: none !important; }
+.search-results:empty { display: none; }
 .empty-note { padding: 30px 17px; text-align: center; color: var(--muted); font-size: 12px; }
 .person-option { width: 100%; display: flex; align-items: center; gap: 11px; text-align: left; min-height: 56px; padding: 8px 12px; background: white; border: 0; border-bottom: 1px solid var(--line); color: var(--navy); }
 .person-option:last-child { border-bottom: 0; }
@@ -494,7 +496,8 @@ input[type="datetime-local"].input {
   padding-top: 0;
   border-top: 0;
 }
-.play-pair-results { max-height: 280px; margin-top: 8px; }
+.play-pair-results { max-height: 280px; margin-top: 8px; min-height: 0; }
+.play-pair-results:not([hidden]):not(:empty) { min-height: 80px; }
 .play-pair-row {
   display: flex;
   align-items: center;

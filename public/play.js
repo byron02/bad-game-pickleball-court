@@ -117,6 +117,24 @@ function statusLabel(entry) {
   return 'Reserved · not checked in';
 }
 
+function recordLabel(entry) {
+  if (!entry?.playerId || entry.wins == null) return '';
+  const wins = Number(entry.wins || 0);
+  const losses = Number(entry.losses || 0);
+  return `${wins}–${losses}`;
+}
+
+function statusWithRecord(entry) {
+  const record = recordLabel(entry);
+  return record ? `${statusLabel(entry)} · ${record}` : statusLabel(entry);
+}
+
+function setPairCandidatesVisible(visible) {
+  if (!ui.pairCandidates) return;
+  ui.pairCandidates.hidden = !visible;
+  if (!visible) ui.pairCandidates.replaceChildren();
+}
+
 function renderBoard() {
   const mine = myEntry();
   if (!mine?.playerId) {
@@ -220,6 +238,8 @@ function renderResults() {
     name.textContent = entry.name || 'Player';
     const meta = document.createElement('small');
     const bits = [statusLabel(entry)];
+    const record = recordLabel(entry);
+    if (record) bits.push(record);
     if (controlsEntry(entry)) bits.push('Unlocked');
     else if (entry.hasPlayPin) bits.push('PIN protected');
     if (entry.partnerPlayerId) bits.push(`with ${nameForPlayerId(entry.partnerPlayerId)}`);
@@ -338,7 +358,7 @@ function selectEntry(entryId, { openPin = true, resetView = openPin } = {}) {
   ui.selected.hidden = false;
   ui.selectedAvatar.textContent = initials(entry.name);
   ui.selectedName.textContent = entry.name || 'Player';
-  ui.selectedMeta.textContent = statusLabel(entry);
+  ui.selectedMeta.textContent = statusWithRecord(entry);
   ui.selectedActions.hidden = false;
   // Sitting out already means you were checked in — only show Resume, not Check in & resume.
   ui.checkIn.hidden = entry.checkedIn || entry.sittingOut;
@@ -380,7 +400,7 @@ async function submitPin(event) {
 
 function renderPairPanel(entry) {
   ui.pairActions.replaceChildren();
-  ui.pairCandidates.replaceChildren();
+  setPairCandidatesVisible(false);
   if (!entry || !controlsEntry(entry)) return;
 
   if (!entry.playerId) {
@@ -390,7 +410,11 @@ function renderPairPanel(entry) {
   }
 
   if (entry.partnerPlayerId) {
-    ui.pairStatus.textContent = `Locked with ${nameForPlayerId(entry.partnerPlayerId)}. Draws keep you on the same side.`;
+    const partner = roster.find((item) => item.playerId === entry.partnerPlayerId);
+    const partnerRecord = recordLabel(partner);
+    ui.pairStatus.textContent = partnerRecord
+      ? `Locked with ${nameForPlayerId(entry.partnerPlayerId)} (${partnerRecord}). Draws keep you on the same side.`
+      : `Locked with ${nameForPlayerId(entry.partnerPlayerId)}. Draws keep you on the same side.`;
     setPairSearchVisible(false);
     const unpair = document.createElement('button');
     unpair.type = 'button';
@@ -402,7 +426,11 @@ function renderPairPanel(entry) {
   }
 
   if (entry.partnerRequestToPlayerId) {
-    ui.pairStatus.textContent = `Waiting for ${nameForPlayerId(entry.partnerRequestToPlayerId)} to approve. Until then you both stay solo.`;
+    const target = roster.find((item) => item.playerId === entry.partnerRequestToPlayerId);
+    const targetRecord = recordLabel(target);
+    ui.pairStatus.textContent = targetRecord
+      ? `Waiting for ${nameForPlayerId(entry.partnerRequestToPlayerId)} (${targetRecord}) to approve. Until then you both stay solo.`
+      : `Waiting for ${nameForPlayerId(entry.partnerRequestToPlayerId)} to approve. Until then you both stay solo.`;
     setPairSearchVisible(false);
     const cancel = document.createElement('button');
     cancel.type = 'button';
@@ -414,6 +442,7 @@ function renderPairPanel(entry) {
   }
 
   setPairSearchVisible(true);
+  setPairCandidatesVisible(true);
   ui.pairStatus.textContent = 'Pick someone confirmed today. They must approve before the draw locks you together.';
   const search = ui.pairSearch.value.trim().toLowerCase();
   const candidates = roster.filter((item) => {
@@ -439,7 +468,7 @@ function renderPairPanel(entry) {
     const name = document.createElement('strong');
     name.textContent = candidate.name || 'Player';
     const meta = document.createElement('small');
-    meta.textContent = statusLabel(candidate);
+    meta.textContent = statusWithRecord(candidate);
     info.append(name, meta);
     const button = document.createElement('button');
     button.type = 'button';

@@ -620,6 +620,7 @@ export async function listPublicRoster(sessionId) {
 
 export async function watchPublicRoster(sessionId, callback) {
   await ensurePublicAuth();
+  let generation = 0;
   return onSnapshot(
     query(
       collection(db, 'sessions', String(sessionId || ''), 'entries'),
@@ -629,10 +630,41 @@ export async function watchPublicRoster(sessionId, callback) {
       const entries = snapshot.docs
         .map((item) => normalizedEntry(item))
         .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' }));
-      callback(entries);
+      const myGeneration = ++generation;
+      enrichRosterRecords(entries)
+        .then((enriched) => {
+          if (myGeneration !== generation) return;
+          callback(enriched);
+        })
+        .catch(() => {
+          if (myGeneration !== generation) return;
+          callback(entries);
+        });
     },
     (cause) => callback([], cause),
   );
+}
+
+async function enrichRosterRecords(entries) {
+  const ids = [...new Set(entries.map((entry) => entry.playerId).filter(Boolean))];
+  if (!ids.length) return entries;
+  const pairs = await Promise.all(ids.map(async (playerId) => {
+    try {
+      const snap = await getDoc(directoryRef(playerId));
+      if (!snap.exists()) return [playerId, null];
+      const data = snap.data();
+      return [playerId, { wins: Number(data.wins || 0), losses: Number(data.losses || 0) }];
+    } catch {
+      return [playerId, null];
+    }
+  }));
+  const records = new Map(pairs);
+  return entries.map((entry) => {
+    const record = entry.playerId ? records.get(entry.playerId) : null;
+    return record
+      ? { ...entry, wins: record.wins, losses: record.losses }
+      : entry;
+  });
 }
 
 export async function getPublicAuthUid() {
