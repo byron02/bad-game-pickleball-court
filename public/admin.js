@@ -20,6 +20,8 @@ const ui = {
   todayPlayersList: $('todayPlayersList'), todayWaitlistList: $('todayWaitlistList'),
   todayWaitlistCount: $('todayWaitlistCountLabel'), gotoPlayers: $('gotoPlayersButton'),
   rosterSearch: $('rosterSearch'), rosterFillList: $('rosterFillList'), fillSpotsNote: $('fillSpotsNote'),
+  confirmedPager: $('confirmedPager'), fillPager: $('fillPager'), waitlistPager: $('waitlistPager'),
+  directoryPager: $('directoryPager'),
   directorySearch: $('directorySearch'), directoryList: $('directoryList'), shareLink: $('shareLinkText'),
   copyLink: $('copyLinkButton'), copyLinkSecondary: $('copyLinkSecondary'), refresh: $('refreshButton'),
   reset: $('resetButton'), resetDialog: $('resetDialog'), resetForm: $('resetForm'), resetConfirm: $('resetConfirm'), cancelReset: $('cancelReset'),
@@ -36,6 +38,8 @@ let currentView = 'overview';
 const pendingSkillByEntry = new Map();
 const SKILL_LEVELS = ['beginner', 'intermediate', 'advanced'];
 const VIEWS = ['overview', 'requests', 'roster', 'directory', 'courts'];
+const PAGE_SIZE = 12;
+const listPages = { confirmed: 1, waitlist: 1, fill: 1, directory: 1 };
 
 function showAlert(message, type = 'error') {
   ui.alert.textContent = message;
@@ -211,17 +215,61 @@ function renderEntry(entry, kind) {
   return row;
 }
 
-function renderList(container, items, kind, emptyMessage) {
+function pageSlice(items, key, size = PAGE_SIZE) {
+  const total = items.length;
+  const pages = Math.max(1, Math.ceil(total / size) || 1);
+  const page = Math.min(Math.max(1, Number(listPages[key]) || 1), pages);
+  listPages[key] = page;
+  const start = (page - 1) * size;
+  return {
+    page,
+    pages,
+    total,
+    start: total ? start + 1 : 0,
+    end: Math.min(start + size, total),
+    items: items.slice(start, start + size),
+  };
+}
+
+function renderPager(pager, key, info) {
+  if (!pager) return;
+  if (!info.total || info.pages <= 1) {
+    pager.hidden = true;
+    pager.replaceChildren();
+    return;
+  }
+  pager.hidden = false;
+  pager.replaceChildren();
+  const meta = node('span', 'list-pager-meta', `Showing ${info.start}–${info.end} of ${info.total}`);
+  const actions = node('div', 'list-pager-actions');
+  const prev = actionButton('Previous', 'page-prev', key, 'button-outline');
+  prev.disabled = info.page <= 1;
+  const label = node('span', 'list-pager-page', `Page ${info.page} / ${info.pages}`);
+  const next = actionButton('Next', 'page-next', key, 'button-outline');
+  next.disabled = info.page >= info.pages;
+  actions.append(prev, label, next);
+  pager.append(meta, actions);
+}
+
+function renderList(container, items, kind, emptyMessage, options = {}) {
   const active = document.activeElement;
   const focusedSkillId = kind === 'pending' && active?.matches?.('select[data-skill-for]')
     ? active.dataset.skillFor
     : null;
   container.replaceChildren();
+  const pageKey = options.pageKey || null;
+  const pager = options.pager || null;
+  const pageable = pageKey ? pageSlice(items, pageKey) : { items, total: items.length, pages: 1, page: 1, start: items.length ? 1 : 0, end: items.length };
   if (!items.length) {
+    if (pager) {
+      pager.hidden = true;
+      pager.replaceChildren();
+    }
     container.append(node('p', 'panel-empty', emptyMessage));
     return;
   }
-  for (const entry of items) container.append(renderEntry(entry, kind));
+  for (const entry of pageable.items) container.append(renderEntry(entry, kind));
+  if (pageKey) renderPager(pager, pageKey, pageable);
   if (focusedSkillId) {
     container.querySelector(`select[data-skill-for="${CSS.escape(focusedSkillId)}"]`)?.focus();
   }
@@ -256,21 +304,23 @@ function renderFillList() {
     if (!player.active || activePlayerIds.has(player.id)) return false;
     const text = `${player.name || ''} ${player.skillLevel || ''} ${player.division || ''}`.toLowerCase();
     return text.includes(search);
-  }).slice(0, 40);
+  });
   if (ui.fillSpotsNote) {
     ui.fillSpotsNote.textContent = openSpots > 0
       ? `${openSpots} open confirmed ${openSpots === 1 ? 'spot' : 'spots'}. Search someone who is not reserved yet, then add them or add and check in.`
       : 'Confirmed spots are full. You can still reserve players to the waitlist.';
   }
   ui.rosterFillList.replaceChildren();
+  const pageable = pageSlice(available, 'fill');
   if (!available.length) {
+    renderPager(ui.fillPager, 'fill', pageable);
     ui.rosterFillList.append(node('p', 'panel-empty',
       players.length
         ? (search ? 'No matching free players.' : 'Every approved player is already on today’s list.')
         : 'No approved players in the directory yet.'));
     return;
   }
-  for (const player of available) {
+  for (const player of pageable.items) {
     const row = node('div', 'fill-row');
     const head = node('div', 'fill-row-head');
     head.append(avatar(player));
@@ -290,6 +340,7 @@ function renderFillList() {
     row.append(actions);
     ui.rosterFillList.append(row);
   }
+  renderPager(ui.fillPager, 'fill', pageable);
 }
 
 function renderDirectory() {
@@ -297,14 +348,16 @@ function renderDirectory() {
   const available = players.filter((player) => {
     const text = `${player.name || ''} ${player.skillLevel || ''} ${player.division || ''}`.toLowerCase();
     return player.active && text.includes(search);
-  }).slice(0, 40);
+  });
   const activePlayerIds = rosteredPlayerIds();
   ui.directoryList.replaceChildren();
+  const pageable = pageSlice(available, 'directory');
   if (!available.length) {
+    renderPager(ui.directoryPager, 'directory', pageable);
     ui.directoryList.append(node('p', 'panel-empty', players.length ? 'No matching player found.' : 'No approved players in the directory yet.'));
     return;
   }
-  for (const player of available) {
+  for (const player of pageable.items) {
     const row = node('div', 'directory-row');
     row.append(avatar(player));
     const info = node('div', 'person-info');
@@ -319,6 +372,7 @@ function renderDirectory() {
     row.append(actionButton('Edit', 'edit-player', player.id, 'button-quiet'));
     ui.directoryList.append(row);
   }
+  renderPager(ui.directoryPager, 'directory', pageable);
 }
 
 function renderDashboard(data) {
@@ -357,8 +411,14 @@ function renderDashboard(data) {
   if (ui.waitlistBlock) ui.waitlistBlock.hidden = waitlist.length === 0;
   syncPendingBadges(pendingCount);
   renderList(ui.pendingList, pending, 'pending', 'No signup requests to review.');
-  renderList(ui.confirmedList, confirmed, 'confirmed', 'No reserved players yet. Share the signup link or add a known player.');
-  if (ui.waitlistList) renderList(ui.waitlistList, waitlist, 'waitlist', 'No players on the waitlist.');
+  renderList(ui.confirmedList, confirmed, 'confirmed', 'No reserved players yet. Share the signup link or add a known player.', {
+    pageKey: 'confirmed', pager: ui.confirmedPager,
+  });
+  if (ui.waitlistList) {
+    renderList(ui.waitlistList, waitlist, 'waitlist', 'No players on the waitlist.', {
+      pageKey: 'waitlist', pager: ui.waitlistPager,
+    });
+  }
   renderTodaySide(confirmed, waitlist, open);
   renderFillList();
   renderDirectory();
@@ -525,7 +585,10 @@ ui.directoryList.addEventListener('click', async (event) => {
     button.disabled = false;
   }
 });
-ui.rosterSearch?.addEventListener('input', renderFillList);
+ui.rosterSearch?.addEventListener('input', () => {
+  listPages.fill = 1;
+  renderFillList();
+});
 ui.rosterFillList?.addEventListener('click', async (event) => {
   const button = event.target.closest('button[data-action]');
   if (!button || !session) return;
@@ -543,7 +606,25 @@ ui.rosterFillList?.addEventListener('click', async (event) => {
     button.disabled = false;
   }
 });
-ui.directorySearch.addEventListener('input', renderDirectory);
+ui.directorySearch.addEventListener('input', () => {
+  listPages.directory = 1;
+  renderDirectory();
+});
+
+for (const pager of [ui.confirmedPager, ui.waitlistPager, ui.fillPager, ui.directoryPager]) {
+  pager?.addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-action]');
+    if (!button) return;
+    const key = button.dataset.id;
+    if (!Object.prototype.hasOwnProperty.call(listPages, key)) return;
+    if (button.dataset.action === 'page-prev') listPages[key] = Math.max(1, listPages[key] - 1);
+    if (button.dataset.action === 'page-next') listPages[key] += 1;
+    if (key === 'confirmed' || key === 'waitlist') renderDashboard({ session, entries, players });
+    else if (key === 'fill') renderFillList();
+    else if (key === 'directory') renderDirectory();
+  });
+}
+
 $('cancelPlayer').addEventListener('click', () => $('playerDialog').close());
 $('playerForm').addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -557,6 +638,52 @@ $('playerForm').addEventListener('submit', async (event) => {
     $('playerDialog').close();
     await refreshDashboard();
     showAlert('Player profile updated.', 'success');
+  } catch (error) {
+    showAlert(friendlyError(error));
+  } finally {
+    save.disabled = false;
+  }
+});
+
+function openAddPlayerDialog() {
+  if (!session) return showAlert('Load today’s session first.');
+  $('addPlayerNameInput').value = '';
+  $('addPlayerSkillInput').value = 'intermediate';
+  $('addPlayerDivisionInput').value = 'unspecified';
+  $('addPlayerReserveInput').checked = true;
+  $('addPlayerCheckInInput').checked = false;
+  $('addPlayerDialog').showModal();
+  $('addPlayerNameInput').focus();
+}
+
+$('addPlayerButton')?.addEventListener('click', openAddPlayerDialog);
+$('addPlayerDirectoryButton')?.addEventListener('click', openAddPlayerDialog);
+$('cancelAddPlayer')?.addEventListener('click', () => $('addPlayerDialog')?.close());
+$('addPlayerReserveInput')?.addEventListener('change', () => {
+  if (!$('addPlayerReserveInput').checked) $('addPlayerCheckInInput').checked = false;
+});
+$('addPlayerCheckInInput')?.addEventListener('change', () => {
+  if ($('addPlayerCheckInInput').checked) $('addPlayerReserveInput').checked = true;
+});
+$('addPlayerForm')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!$('addPlayerForm').reportValidity() || !session) return;
+  const save = $('saveAddPlayer');
+  save.disabled = true;
+  try {
+    const result = await createAndReservePlayer(session.id, {
+      name: $('addPlayerNameInput').value,
+      skillLevel: $('addPlayerSkillInput').value,
+      division: $('addPlayerDivisionInput').value,
+      reserve: $('addPlayerReserveInput').checked,
+      checkIn: $('addPlayerCheckInInput').checked,
+    });
+    $('addPlayerDialog').close();
+    await refreshDashboard();
+    if (result.entry?.checkedIn) showAlert('Player created and checked in.', 'success');
+    else if (result.entry?.status === 'waitlisted') showAlert('Player created and waitlisted.', 'success');
+    else if (result.entry) showAlert('Player created and reserved for today.', 'success');
+    else showAlert('Player saved to the directory.', 'success');
   } catch (error) {
     showAlert(friendlyError(error));
   } finally {

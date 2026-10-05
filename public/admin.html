@@ -158,9 +158,11 @@
               </div>
             </div>
             <div id="confirmedList" class="entry-list roster-full-list" aria-live="polite"></div>
+            <nav id="confirmedPager" class="list-pager" aria-label="Confirmed players pages" hidden></nav>
             <div id="waitlistBlock" class="waitlist-block" hidden>
               <div class="list-subhead"><h3>Waitlist</h3><span id="waitlistCountLabel" class="count-pill">0</span></div>
               <div id="waitlistList" class="entry-list"></div>
+              <nav id="waitlistPager" class="list-pager" aria-label="Waitlist pages" hidden></nav>
             </div>
           </section>
           <section class="panel fill-panel">
@@ -174,6 +176,7 @@
             <label class="field-label" for="rosterSearch">Search all players</label>
             <div class="search-field"><span aria-hidden="true">⌕</span><input id="rosterSearch" type="search" placeholder="Name or skill level" autocomplete="off"></div>
             <div id="rosterFillList" class="directory-list fill-list" aria-live="polite"></div>
+            <nav id="fillPager" class="list-pager" aria-label="Fill list pages" hidden></nav>
           </section>
         </div>
       </section>
@@ -193,6 +196,7 @@
           <label class="field-label" for="directorySearch">Search players</label>
           <div class="search-field"><span aria-hidden="true">⌕</span><input id="directorySearch" type="search" placeholder="Name or skill level" autocomplete="off"></div>
           <div id="directoryList" class="directory-list" aria-live="polite"></div>
+          <nav id="directoryPager" class="list-pager" aria-label="Directory pages" hidden></nav>
         </section>
       </section>
 

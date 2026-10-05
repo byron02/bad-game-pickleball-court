@@ -313,7 +313,40 @@ h1, h2, h3, p { margin: 0; }
   font-size: 13px;
   font-weight: 650;
 }
-.check-row input { accent-color: var(--blue); width: 16px; height: 16px; }
+.list-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.list-pager[hidden] { display: none !important; }
+.list-pager-meta {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+.list-pager-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.list-pager-actions .button {
+  min-height: 36px;
+  padding: 7px 12px;
+  font-size: 12px;
+  box-shadow: none;
+}
+.list-pager-page {
+  min-width: 64px;
+  text-align: center;
+  color: var(--navy);
+  font-size: 12px;
+  font-weight: 800;
+}
 .auth-panel { width: min(470px, 100%); margin: 100px auto 0; background: #fff; border: 1px solid var(--line); border-radius: 17px; padding: 30px; box-shadow: var(--shadow); }
 .auth-panel h1 { font-size: 25px; margin-top: 7px; }
 .auth-panel p { color: var(--muted); font-size: 13px; margin-top: 10px; }
