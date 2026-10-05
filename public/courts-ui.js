@@ -36,22 +36,101 @@ export function initCourtsUI({ getSession, getEntries, showAlert, refreshRoster 
     return snapshot?.name || getEntries().find((entry) => entry.playerId === id)?.name || 'Player';
   }
 
-  function teamRow(side, ids, game) {
+  function playerLabel(id, game, previewPlayers = []) {
+    const fromPreview = previewPlayers.find((player) => player.id === id);
+    const name = fromPreview?.name || nameFor(id, game);
+    const gamesPlayed = Number(fromPreview?.gamesPlayed || 0);
+    const entry = getEntries().find((item) => item.playerId === id);
+    const partner = entry?.partnerPlayerId
+      ? getEntries().find((item) => item.playerId === entry.partnerPlayerId)?.name
+      : null;
+    if (!fromPreview) return partner ? `${name} (with ${partner})` : name;
+    const games = `${gamesPlayed} ${gamesPlayed === 1 ? 'game' : 'games'}`;
+    return partner ? `${name} · ${games} · with ${partner}` : `${name} · ${games}`;
+  }
+
+  function teamRow(side, ids, game, previewPlayers = []) {
     const row = el('div', 'court-side');
     row.append(el('strong', '', `Side ${side}`));
-    row.append(el('span', '', ids.map((id) => nameFor(id, game)).join(' + ')));
+    row.append(el('span', '', ids.map((id) => playerLabel(id, game, previewPlayers)).join(' + ')));
     return row;
   }
 
-  function matchContent(lineup, game) {
+  function matchContent(lineup, game, previewPlayers = []) {
     const area = el('div', 'court-match');
-    area.append(teamRow('A', lineup.sideA, game));
+    area.append(teamRow('A', lineup.sideA, game, previewPlayers));
     area.append(el('div', 'court-vs', 'VS'));
-    area.append(teamRow('B', lineup.sideB, game));
+    area.append(teamRow('B', lineup.sideB, game, previewPlayers));
     return area;
   }
 
+  function poolBanner(pool) {
+    const banner = el('div', 'court-pool');
+    if (!pool) {
+      banner.textContent = 'Checking who is waiting…';
+      return banner;
+    }
+    const waiting = Number(pool.waiting || 0);
+    const onCourt = Number(pool.onCourt || 0);
+    const eligible = Number(pool.eligible || 0);
+    banner.append(el('strong', '', `${waiting} waiting`));
+    banner.append(el('span', '', '·'));
+    banner.append(el('strong', '', `${onCourt} on court`));
+    banner.append(el('span', '', '·'));
+    banner.append(el('span', '', `${eligible} eligible here`));
+    return banner;
+  }
+
+  function nextGameBlock(preview, { whilePlaying = false } = {}) {
+    const box = el('div', 'court-next');
+    box.append(el('span', 'label-overline', whilePlaying ? 'Up next' : 'Next game'));
+    if (preview?.lineup) {
+      box.append(el('p', 'court-next-copy', whilePlaying
+        ? 'Waiting players queued for when this match ends. Prioritizes fewer games.'
+        : 'Prioritizes players with fewer games so far.'));
+      box.append(matchContent(preview.lineup, null, preview.players || []));
+    } else {
+      const needed = Number(preview?.pool?.needed || 4);
+      const eligible = Number(preview?.pool?.eligible || 0);
+      box.append(el('p', 'court-next-copy',
+        eligible < needed
+          ? `Need ${needed - eligible} more eligible checked-in player${needed - eligible === 1 ? '' : 's'} for this court’s rules.`
+          : 'Not enough eligible players right now.'));
+    }
+    return box;
+  }
+
+  function updateCourtKpis() {
+    const waitingEl = $('courtWaitingMetric');
+    const playingEl = $('courtPlayingMetric');
+    const availableEl = $('courtAvailableMetric');
+    const availableNames = $('courtAvailableNames');
+    if (!waitingEl || !playingEl || !availableEl) return;
+
+    const sample = [...previews.values()].find((item) => item?.pool) || null;
+    const waiting = Number(sample?.pool?.waiting ?? 0);
+    const playing = Number(sample?.pool?.onCourt ?? 0);
+    const freeCourts = courts.filter((court) =>
+      !games.some((game) => game.courtId === court.id && game.status === 'active'));
+
+    waitingEl.textContent = String(waiting);
+    playingEl.textContent = String(playing);
+    availableEl.textContent = String(freeCourts.length);
+    if (availableNames) {
+      if (!courts.length) {
+        availableNames.textContent = 'Add a court to start assigning matches';
+      } else if (!freeCourts.length) {
+        availableNames.textContent = 'All courts are playing right now';
+      } else if (freeCourts.length === courts.length) {
+        availableNames.textContent = freeCourts.map((court) => court.name).join(', ');
+      } else {
+        availableNames.textContent = `Open: ${freeCourts.map((court) => court.name).join(', ')}`;
+      }
+    }
+  }
+
   function render() {
+    updateCourtKpis();
     grid.replaceChildren();
     if (!courts.length) {
       grid.append(el('p', 'panel-empty', 'Add Court 1 to set its skill levels and division. Each court can start separately.'));
@@ -63,7 +142,7 @@ export function initCourtsUI({ getSession, getEntries, showAlert, refreshRoster 
       const top = el('div', 'court-card-top');
       const title = el('div');
       title.append(el('h3', '', court.name));
-      title.append(el('p', '', active ? 'Match in progress' : 'Ready for an individual draw'));
+      title.append(el('p', '', active ? 'Match in progress' : 'Ready for the next draw'));
       top.append(title, el('span', `badge badge-${active ? 'green' : 'blue'}`, active ? 'Playing' : 'Ready'));
       card.append(top);
 
@@ -74,24 +153,34 @@ export function initCourtsUI({ getSession, getEntries, showAlert, refreshRoster 
       card.append(settings);
 
       const actions = el('div', 'court-actions');
+      card.append(poolBanner(preview?.pool));
       if (active) {
         card.append(matchContent(active.lineup, active));
+        card.append(nextGameBlock(preview, { whilePlaying: true }));
         actions.append(button('Side A wins', 'win-a', active.id, 'button-primary'));
         actions.append(button('Side B wins', 'win-b', active.id, 'button-primary'));
         actions.append(button('Replace player', 'replace', active.id));
+        if (preview?.lineup) {
+          actions.append(button('Shuffle next', 'draw', court.id));
+          actions.append(button('Clear next', 'clear-draw', court.id, 'button-quiet'));
+        } else {
+          actions.append(button('Draw next game', 'draw', court.id));
+        }
         actions.append(button('Cancel game', 'cancel-game', active.id, 'button-quiet'));
-      } else if (preview?.lineup) {
-        card.append(matchContent(preview.lineup));
-        actions.append(button('Start this court', 'start', court.id, 'button-primary'));
-        actions.append(button('Shuffle', 'draw', court.id));
-        actions.append(button('Settings', 'edit', court.id, 'button-quiet'));
       } else {
-        card.append(el('div', 'court-empty', latest
-          ? `Last game: Side ${latest.result?.winnerSide || '?'} won. Draw the next game for this court.`
-          : 'No game started. Draw from checked-in players who meet this court’s rules.'));
-        actions.append(button('Draw players', 'draw', court.id, 'button-primary'));
+        card.append(nextGameBlock(preview));
+        if (preview?.lineup) {
+          actions.append(button('Start this court', 'start', court.id, 'button-primary'));
+          actions.append(button('Shuffle next', 'draw', court.id));
+          actions.append(button('Clear draw', 'clear-draw', court.id, 'button-quiet'));
+        } else {
+          actions.append(button('Draw next game', 'draw', court.id, 'button-primary'));
+        }
         actions.append(button('Settings', 'edit', court.id, 'button-quiet'));
-        actions.append(button('Delete', 'delete', court.id, 'button-quiet'));
+        if (!preview?.lineup) actions.append(button('Delete', 'delete', court.id, 'button-quiet'));
+        if (latest?.result?.winnerSide) {
+          card.append(el('p', 'court-last', `Last result: Side ${latest.result.winnerSide} won.`));
+        }
       }
       card.append(actions);
       grid.append(card);
@@ -114,6 +203,24 @@ export function initCourtsUI({ getSession, getEntries, showAlert, refreshRoster 
     }
   }
 
+  async function refreshPreviews() {
+    // Propose for every court, including ones currently playing, so organizers
+    // can see who is up next while the live match is still on.
+    await Promise.all(courts.map(async (court) => {
+      try {
+        const preview = await proposeCourtLineup({
+          sessionId,
+          courtId: court.id,
+          // Stable-ish seed keeps the suggested next game from jumping on every refresh.
+          random: () => 0.37,
+        });
+        previews.set(court.id, preview);
+      } catch {
+        previews.set(court.id, { lineup: null, players: [], pool: { waiting: 0, onCourt: 0, eligible: 0, needed: 4 } });
+      }
+    }));
+  }
+
   async function refresh(nextSessionId = getSession()?.id) {
     if (!nextSessionId) return;
     if (sessionId !== nextSessionId) {
@@ -125,9 +232,7 @@ export function initCourtsUI({ getSession, getEntries, showAlert, refreshRoster 
     ]);
     courts = courtResult.courts;
     games = gameResult.games;
-    for (const court of courts) {
-      if (court.activeGameId) previews.delete(court.id);
-    }
+    await refreshPreviews();
     render();
   }
 
@@ -237,13 +342,20 @@ export function initCourtsUI({ getSession, getEntries, showAlert, refreshRoster 
     try {
       if (action === 'draw') {
         const preview = await proposeCourtLineup({ sessionId, courtId: id });
-        if (!preview.lineup) throw new Error('Not enough eligible checked-in players for this court.');
         previews.set(id, preview);
+        if (!preview.lineup) throw new Error('Not enough eligible checked-in players for this court.');
+      } else if (action === 'clear-draw') {
+        const existing = previews.get(id);
+        previews.set(id, {
+          lineup: null,
+          players: [],
+          pool: existing?.pool || { waiting: 0, onCourt: 0, eligible: 0, needed: 4 },
+        });
+        showAlert('Next-game draw cleared.', 'success');
       } else if (action === 'start') {
         const preview = previews.get(id);
         if (!preview?.lineup) throw new Error('Draw players first.');
         await startCourtGame({ sessionId, courtId: id, lineup: preview.lineup });
-        previews.delete(id);
         showAlert(`${court?.name || 'Court'} started.`, 'success');
       } else if (action === 'win-a' || action === 'win-b') {
         const winnerSide = action === 'win-a' ? 'A' : 'B';
