@@ -565,7 +565,9 @@ function renderDashboard(data) {
   if (document.activeElement !== ui.sessionDate) ui.sessionDate.value = session.date || '';
   if (document.activeElement !== ui.capacityInput) ui.capacityInput.value = String(session.capacity ?? 32);
 
-  const pending = entries.filter((entry) => entry.status === 'pending');
+  const pending = entries
+    .filter((entry) => entry.status === 'pending')
+    .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')) || String(a.name || '').localeCompare(String(b.name || '')));
   const confirmed = entries.filter((entry) => entry.status === 'confirmed');
   const waitlist = entries.filter((entry) => ['waitlist', 'waitlisted'].includes(entry.status));
   const pendingIds = new Set(pending.map((entry) => entry.id));
@@ -577,8 +579,9 @@ function renderDashboard(data) {
   }
   const confirmedCount = Number(session.confirmedCount ?? confirmed.length);
   const checkedInCount = Number(session.checkedInCount ?? confirmed.filter((entry) => entry.checkedIn).length);
-  const pendingCount = Number(session.pendingCount ?? pending.length);
-  const waitlistCount = Number(session.waitlistCount ?? waitlist.length);
+  // Badge/list counts must match the entries currently shown — never a stale session field.
+  const pendingCount = pending.length;
+  const waitlistCount = waitlist.length;
   const capacity = Number(session.capacity ?? 32);
   const open = Number(session.spotsLeft ?? Math.max(0, capacity - confirmedCount));
   ui.confirmed.textContent = String(confirmedCount);

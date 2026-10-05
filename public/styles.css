@@ -542,13 +542,46 @@ h1, h2, h3, p { margin: 0; }
   .admin-grid { grid-template-columns: 1fr; }
   .players-desk { grid-template-columns: 1fr; }
   .today-side-panel, .players-desk .fill-panel { position: static; }
-  .today-players-list, .roster-scroll-list { max-height: min(40vh, 320px); overflow: auto; }
-  .players-desk .roster-full-list,
+  .today-players-list, .roster-scroll-list { max-height: none; overflow: visible; }
+  .players-desk .roster-full-list[data-layout="grid"],
+  .players-desk .roster-full-list[data-layout="list"],
   .players-desk #waitlistList,
   .players-desk .fill-list {
     max-height: none;
     overflow: visible;
     grid-template-columns: 1fr;
+  }
+  .players-desk .roster-full-list[data-layout="grid"] .entry-row,
+  .today-players-list .entry-row,
+  .requests-desk .entry-list .entry-row {
+    align-items: flex-start;
+    gap: 10px;
+    padding: 12px;
+  }
+  .players-desk .roster-full-list[data-layout="grid"] .entry-actions,
+  .today-players-list .entry-actions,
+  .requests-desk .entry-list .entry-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+  }
+  .players-desk .roster-full-list[data-layout="grid"] .entry-actions .button,
+  .today-players-list .entry-actions .button,
+  .requests-desk .entry-list .entry-actions .button {
+    flex: 1 1 calc(50% - 6px);
+    min-width: 0;
+    justify-content: center;
+  }
+  .players-desk .roster-full-list[data-layout="grid"] .entry-actions .button-quiet,
+  .today-players-list .entry-actions .button-quiet,
+  .requests-desk .entry-list .entry-actions .button-quiet {
+    flex: 0 0 auto;
+    padding-inline: 8px;
+  }
+  .players-desk .panel-head {
+    flex-wrap: wrap;
+    gap: 10px;
   }
   .admin-side-column { order: -1; }
   .court-grid { grid-template-columns: 1fr; }
@@ -564,16 +597,17 @@ h1, h2, h3, p { margin: 0; }
     box-shadow: 0 -8px 24px rgb(16 42 72 / 8%); backdrop-filter: blur(10px);
   }
   .mobile-nav button {
-    position: relative; display: flex; align-items: center; justify-content: center;
-    min-height: 48px; padding: 0 2px; border: 0; border-radius: 10px; background: transparent;
-    color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: .01em;
+    position: relative; display: inline-flex; align-items: center; justify-content: center;
+    gap: 4px; min-height: 48px; padding: 0 2px; border: 0; border-radius: 10px; background: transparent;
+    color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .01em;
     white-space: nowrap;
   }
   .mobile-nav button.current { color: var(--blue); background: var(--blue-pale); }
   .mobile-nav-badge {
-    position: absolute; top: 4px; right: 4px;
-    min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px;
-    background: var(--blue); color: white; font-size: 9px; line-height: 16px; font-weight: 800;
+    position: static;
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 16px; height: 16px; padding: 0 5px; border-radius: 999px;
+    background: var(--blue); color: white; font-size: 9px; line-height: 1; font-weight: 800;
   }
   .entry-skill { max-width: none; }
 }
