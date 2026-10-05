@@ -118,7 +118,7 @@ test('public search reads only the approved directory; full profiles and session
       });
       await setDoc(doc(context.firestore(), 'playerDirectory', 'ana'), {
         name: 'Ana Cruz', nameLower: 'ana cruz', skillLevel: 'intermediate',
-        division: 'woman', photoData: null,
+        division: 'woman', photoData: null, wins: 2, losses: 1,
       });
     });
     const db = env.authenticatedContext('player-three', anonymous).firestore();
@@ -127,6 +127,11 @@ test('public search reads only the approved directory; full profiles and session
       startAt('an'), endAt('an\uf8ff'), limit(20),
     )));
     assert.equal(found.docs.length, 1);
+    const standings = await assertSucceeds(getDocs(query(
+      collection(db, 'playerDirectory'), orderBy('wins', 'desc'), limit(20),
+    )));
+    assert.equal(standings.docs[0].id, 'ana');
+    assert.equal(standings.docs[0].data().wins, 2);
     await assertFails(getDocs(collection(db, 'playerDirectory')));
     await assertFails(setDoc(doc(db, 'playerDirectory', 'intruder'), {
       name: 'Intruder', nameLower: 'intruder', skillLevel: 'advanced', division: 'man', photoData: null,
@@ -143,4 +148,40 @@ test('closed signup links reject new requests', { skip: !enabled }, async () => 
   });
   const db = env.authenticatedContext('late-player', anonymous).firestore();
   await assertFails(setDoc(doc(db, 'sessions', sessionId, 'entries', 'late-player'), request('late-player')));
+});
+
+test('organizer can add another email and that account is authorized immediately', { skip: !enabled }, async () => {
+  const google = { email: 'owner@example.com', firebase: { sign_in_provider: 'google.com' } };
+  const helper = { email: 'helper@example.com', firebase: { sign_in_provider: 'google.com' } };
+  await env.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), 'organizers', 'owner'), {
+      active: true, email: 'owner@example.com',
+    });
+  });
+  const ownerDb = env.authenticatedContext('owner', google).firestore();
+  await assertSucceeds(setDoc(doc(ownerDb, 'organizerEmails', 'helper@example.com'), {
+    email: 'helper@example.com',
+    active: true,
+    addedByUid: 'owner',
+    addedByEmail: 'owner@example.com',
+  }));
+  const helperDb = env.authenticatedContext('helper', helper).firestore();
+  await assertSucceeds(updateDoc(doc(helperDb, 'sessions', sessionId), { capacity: 40 }));
+  await assertSucceeds(setDoc(doc(helperDb, 'organizers', 'helper'), {
+    active: true, email: 'helper@example.com',
+  }));
+});
+
+test('users not on the organizer email list cannot add themselves', { skip: !enabled }, async () => {
+  const google = { email: 'outsider@example.com', firebase: { sign_in_provider: 'google.com' } };
+  const db = env.authenticatedContext('outsider', google).firestore();
+  await assertFails(setDoc(doc(db, 'organizers', 'outsider'), {
+    active: true, email: 'outsider@example.com',
+  }));
+  await assertFails(setDoc(doc(db, 'organizerEmails', 'outsider@example.com'), {
+    email: 'outsider@example.com', active: true,
+  }));
+  await assertFails(setDoc(doc(db, 'organizerEmails', 'friend@example.com'), {
+    email: 'friend@example.com', active: true,
+  }));
 });

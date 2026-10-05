@@ -16,6 +16,8 @@ import {
   recordGameResult,
   validateCourtConfig,
   validateLineup,
+  courtPoolSummary,
+  eligiblePlayersForCourt,
 } from './domain/courts.js';
 
 const app = getApps()[0] || initializeApp(firebaseConfig);
@@ -52,6 +54,7 @@ function gameRef(sessionId, gameId) {
   return doc(db, 'sessions', idOf(sessionId, 'Session id'), 'games', idOf(gameId, 'Game id'));
 }
 function playerRef(id) { return doc(db, 'players', idOf(id, 'Player id')); }
+function directoryRef(id) { return doc(db, 'playerDirectory', idOf(id, 'Player id')); }
 function entryRef(sessionId, id) {
   return doc(db, 'sessions', idOf(sessionId, 'Session id'), 'entries', idOf(id, 'Entry id'));
 }
@@ -65,11 +68,14 @@ function lockRef(sessionId, playerId) {
 async function ensureOrganizer() {
   const user = await getCurrentUser();
   if (!user || user.isAnonymous) throw error('Organizer sign-in is required.', 'auth-required');
-  const permit = await getDoc(doc(db, 'organizers', user.uid));
-  if (!permit.exists() || permit.data().active !== true) {
-    throw error('This account is not an approved organizer.', 'permission-denied');
+  const uidPermit = await getDoc(doc(db, 'organizers', user.uid));
+  if (uidPermit.exists() && uidPermit.data().active === true) return user;
+  const email = String(user.email || '').trim().toLowerCase();
+  if (email) {
+    const emailPermit = await getDoc(doc(db, 'organizerEmails', email));
+    if (emailPermit.exists() && emailPermit.data().active === true) return user;
   }
-  return user;
+  throw error('This account is not an approved organizer.', 'permission-denied');
 }
 
 function normalizedCourt(snapshot) {
@@ -196,6 +202,7 @@ function domainPlayer(entry) {
     skill: entry.skillLevel,
     gender: entry.division || 'unspecified',
     checkedIn: entry.status === 'confirmed' && entry.checkedIn === true,
+    partnerId: entry.partnerPlayerId || null,
   };
 }
 
@@ -266,6 +273,12 @@ export async function proposeCourtLineup({ sessionId, courtId, random = Math.ran
   const roster = entries.docs.map((snapshot) => snapshot.data());
   const history = games.docs.map((snapshot) => ({ id: snapshot.id, ...snapshot.data() }));
   const players = statsFromGames(roster, history);
+  const pool = courtPoolSummary({ players, activeGames: history });
+  const eligible = eligiblePlayersForCourt({
+    court: { id: court.id, ...court.data() },
+    players,
+    activeGames: history,
+  });
   const lineup = proposeLineup({
     court: { id: court.id, ...court.data() },
     players,
@@ -273,6 +286,7 @@ export async function proposeCourtLineup({ sessionId, courtId, random = Math.ran
     random,
   });
   const selected = lineup ? new Set(idsOf(lineup)) : new Set();
+  const byId = new Map(players.map((player) => [player.id, player]));
   return {
     lineup,
     players: roster.filter((entry) => selected.has(entry.playerId)).map((entry) => ({
@@ -281,7 +295,13 @@ export async function proposeCourtLineup({ sessionId, courtId, random = Math.ran
       skillLevel: entry.skillLevel,
       division: entry.division || 'unspecified',
       photoUrl: entry.photoData || null,
+      gamesPlayed: byId.get(entry.playerId)?.gamesPlayed || 0,
     })),
+    pool: {
+      ...pool,
+      eligible: eligible.length,
+      needed: court.data().format === 'singles' ? 2 : 4,
+    },
   };
 }
 
@@ -480,11 +500,20 @@ export async function completeCourtGame({ sessionId, gameId, winnerSide }) {
       const delta = recorded.statDeltas[ids[i]];
       const player = players[i].data();
       const entry = entries[i].data();
+      const wins = (player.wins || 0) + delta.wins;
+      const losses = (player.losses || 0) + delta.losses;
       transaction.update(playerRef(ids[i]), {
-        wins: (player.wins || 0) + delta.wins,
-        losses: (player.losses || 0) + delta.losses,
-        updatedAt: serverTimestamp(),
+        wins, losses, updatedAt: serverTimestamp(),
       });
+      transaction.set(directoryRef(ids[i]), {
+        name: player.name,
+        nameLower: player.nameLower || String(player.name || '').toLocaleLowerCase(),
+        skillLevel: player.skillLevel,
+        division: player.division || 'unspecified',
+        photoData: player.photoData || null,
+        wins,
+        losses,
+      }, { merge: true });
       transaction.update(entries[i].ref, {
         wins: (entry.wins || 0) + delta.wins,
         losses: (entry.losses || 0) + delta.losses,
