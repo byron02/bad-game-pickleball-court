@@ -3,7 +3,7 @@ import {
   signOutOrganizer, approveEntry, rejectEntry, removeEntry, checkInEntry, checkOutEntry,
   reservePlayer, updatePlayer, updateSession, resetSession, setEntryPartner,
   createAndReservePlayer, getCurrentUser, listOrganizers, addOrganizer, removeOrganizer,
-  setEntrySittingOut,
+  setEntrySittingOut, clearPlayPin, deletePlayer,
 } from '../src/firebaseStore.js';
 import { initCourtsUI } from './courts-ui.js';
 
@@ -384,6 +384,7 @@ function renderEntry(entry, kind) {
   if (kind === 'confirmed') {
     if (entry.sittingOut) top.append(statusBadge('Sitting out', 'amber'));
     else top.append(statusBadge(entry.checkedIn ? 'Checked in' : 'Reserved', entry.checkedIn ? 'green' : 'blue'));
+    if (entry.hasPlayPin) top.append(statusBadge('PIN set', 'blue'));
   }
   if (kind === 'waitlist') top.append(statusBadge('Waitlist', 'amber'));
   if (kind === 'confirmed' && entry.partnerPlayerId) {
@@ -419,6 +420,9 @@ function renderEntry(entry, kind) {
     } else {
       actions.append(actionButton('Sit out', 'sit-out', entry.id, 'button-outline'));
       actions.append(actionButton('Leave today', 'check-out', entry.id, 'button-outline'));
+    }
+    if (entry.hasPlayPin) {
+      actions.append(actionButton('Clear PIN', 'clear-pin', entry.id, 'button-quiet'));
     }
     if (entry.playerId) {
       actions.append(actionButton(entry.partnerPlayerId ? 'Change pair' : 'Pair doubles', 'pair', entry.id, 'button-outline'));
@@ -595,6 +599,7 @@ function renderDirectory() {
     button.disabled = isActive;
     row.append(button);
     row.append(actionButton('Edit', 'edit-player', player.id, 'button-quiet'));
+    row.append(actionButton('Delete', 'delete-player', player.id, 'button-danger-outline'));
     ui.directoryList.append(row);
   }
   renderPager(ui.directoryPager, 'directory', pageable);
@@ -763,6 +768,21 @@ async function runEntryAction(action, entryId, button) {
     }
     return;
   }
+  if (action === 'clear-pin') {
+    const name = entries.find((entry) => entry.id === entryId)?.name || 'this player';
+    if (!confirm(`Clear the desk PIN for ${name}? They can set a new PIN on /play.`)) return;
+    button.disabled = true;
+    try {
+      await clearPlayPin(session.id, entryId);
+      await refreshDashboard();
+      showAlert(`PIN cleared for ${name}.`, 'success');
+    } catch (error) {
+      showAlert(friendlyError(error));
+    } finally {
+      button.disabled = false;
+    }
+    return;
+  }
   const fn = operations[action];
   if (!fn) return;
   if (action === 'remove') {
@@ -862,6 +882,21 @@ ui.directoryList.addEventListener('click', async (event) => {
   if (!button || !session) return;
   if (button.dataset.action === 'edit-player') {
     openPlayerEditor(button.dataset.id);
+    return;
+  }
+  if (button.dataset.action === 'delete-player') {
+    const player = players.find((item) => item.id === button.dataset.id);
+    const name = player?.name || 'this player';
+    if (!confirm(`Delete ${name} from the directory? They can be re-added later. Today’s roster spots are not removed automatically.`)) return;
+    button.disabled = true;
+    try {
+      await deletePlayer(button.dataset.id);
+      await refreshDashboard();
+      showAlert(`${name} removed from the directory.`, 'success');
+    } catch (error) {
+      showAlert(friendlyError(error));
+      button.disabled = false;
+    }
     return;
   }
   if (button.dataset.action !== 'reserve') return;

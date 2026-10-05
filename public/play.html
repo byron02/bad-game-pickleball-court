@@ -27,7 +27,7 @@
     <section class="intro-panel play-intro">
       <div class="eyebrow">Your attendance</div>
       <h1>Find your name. Manage your status.</h1>
-      <p class="intro-copy">Only the phone that sent your signup request can check you in, sit you out, leave, or send pair requests. Other players can see names, not change them.</p>
+      <p class="intro-copy">Search your name, set or enter your 4-digit PIN, then check in, sit out, leave, or pair. Other phones cannot change your status without the PIN. Organizers can clear a forgotten PIN.</p>
     </section>
 
     <section id="missingLinkPanel" class="signup-card" hidden>
@@ -70,6 +70,17 @@
           </div>
         </div>
         <p id="selectedNote" class="field-help"></p>
+
+        <div id="pinPanel" class="play-pin" hidden>
+          <strong id="pinTitle">Create a 4-digit PIN</strong>
+          <p id="pinHelp" class="field-help"></p>
+          <label class="field-label" for="pinInput">PIN</label>
+          <input id="pinInput" class="input" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="off" placeholder="••••">
+          <label id="pinConfirmLabel" class="field-label" for="pinConfirmInput">Confirm PIN</label>
+          <input id="pinConfirmInput" class="input" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="off" placeholder="••••">
+          <button id="pinSubmitButton" class="button button-primary button-wide" type="button">Save PIN & unlock</button>
+        </div>
+
         <div id="selectedActions" class="play-actions" hidden>
           <button id="checkInButton" class="button button-primary button-wide" type="button">Check in</button>
           <button id="sitOutButton" class="button button-outline button-wide" type="button">Sit out</button>

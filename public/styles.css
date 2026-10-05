@@ -467,6 +467,17 @@ input[type="datetime-local"].input {
 .play-pair-row .person-info { min-width: 0; }
 .play-pair-row strong { display: block; font-size: 14px; }
 .play-pair-row small { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; }
+.play-pin {
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  display: grid;
+  gap: 8px;
+}
+.play-pin strong { font-size: 15px; }
+.play-pin .input { letter-spacing: 0.35em; font-size: 18px; }
 .directory-list { display: grid; gap: 7px; max-height: 334px; overflow: auto; margin-top: 13px; }
 .directory-row { display: flex; align-items: center; gap: 10px; padding: 8px; border: 1px solid var(--line); border-radius: 10px; min-width: 0; }
 .directory-row .person-info { flex: 1; min-width: 0; }

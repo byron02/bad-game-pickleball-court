@@ -156,33 +156,46 @@ test('player desk can list open courts and own attendance, but not sit someone e
       await setDoc(doc(db, 'sessions', sessionId, 'entries', 'player-one'), request('player-one', {
         status: 'confirmed', playerId: 'p1', name: 'Alex', skillLevel: 'beginner',
         checkedIn: true, sittingOut: false, partnerPlayerId: null, partnerRequestToPlayerId: null,
+        hasPlayPin: false, playClaimUid: null,
       }));
       await setDoc(doc(db, 'sessions', sessionId, 'entries', 'player-two'), request('player-two', {
         status: 'confirmed', playerId: 'p2', name: 'Stefanny', skillLevel: 'beginner',
         checkedIn: true, sittingOut: false, partnerPlayerId: null, partnerRequestToPlayerId: null,
+        hasPlayPin: false, playClaimUid: null,
       }));
       await updateDoc(doc(db, 'sessions', sessionId), { confirmedCount: 2, checkedInCount: 2 });
     });
     const alex = env.authenticatedContext('player-one', anonymous).firestore();
     const stef = env.authenticatedContext('player-two', anonymous).firestore();
     await assertSucceeds(getDocs(collection(alex, 'courts')));
+
+    // Set PIN + claim for Alex
+    await assertSucceeds(setDoc(doc(alex, 'sessions', sessionId, 'entryPins', 'player-one'), {
+      pin: '1234', claimUid: 'player-one', updatedAt: serverTimestamp(),
+    }));
+    await assertSucceeds(setDoc(doc(alex, 'sessions', sessionId, 'playClaims', 'player-one'), {
+      entryId: 'player-one', playerId: 'p1', updatedAt: serverTimestamp(),
+    }));
+    await assertSucceeds(updateDoc(doc(alex, 'sessions', sessionId, 'entries', 'player-one'), {
+      hasPlayPin: true, playClaimUid: 'player-one',
+    }));
     await assertSucceeds(updateDoc(doc(alex, 'sessions', sessionId, 'entries', 'player-one'), {
       sittingOut: true,
     }));
     await assertFails(updateDoc(doc(alex, 'sessions', sessionId, 'entries', 'player-two'), {
       sittingOut: true,
     }));
-    await assertSucceeds(updateDoc(doc(alex, 'sessions', sessionId, 'entries', 'player-one'), {
-      sittingOut: false,
-      partnerRequestToPlayerId: 'p2',
+
+    // Wrong PIN cannot unlock Stefanny
+    await assertSucceeds(setDoc(doc(stef, 'sessions', sessionId, 'entryPins', 'player-two'), {
+      pin: '9999', claimUid: 'player-two', updatedAt: serverTimestamp(),
     }));
-    await assertSucceeds(updateDoc(doc(stef, 'sessions', sessionId, 'entries', 'player-one'), {
-      partnerRequestToPlayerId: null,
-      partnerPlayerId: 'p2',
+    await assertFails(updateDoc(doc(alex, 'sessions', sessionId, 'entryPins', 'player-two'), {
+      pin: '0000', claimUid: 'player-one',
     }));
-    await assertSucceeds(updateDoc(doc(stef, 'sessions', sessionId, 'entries', 'player-two'), {
-      partnerPlayerId: 'p1',
-      partnerRequestToPlayerId: null,
+    // Correct PIN unlock
+    await assertSucceeds(updateDoc(doc(alex, 'sessions', sessionId, 'entryPins', 'player-two'), {
+      pin: '9999', claimUid: 'player-one',
     }));
   });
 

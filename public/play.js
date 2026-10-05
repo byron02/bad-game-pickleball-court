@@ -2,7 +2,7 @@ import {
   getPublicSession, getPublicAuthUid, watchPublicRoster,
   playerCheckIn, playerSitOut, playerResume, playerLeaveToday,
   requestPartner, cancelPartnerRequest, approvePartnerRequest,
-  declinePartnerRequest, clearMyPartner,
+  declinePartnerRequest, clearMyPartner, setPlayPin, unlockPlayPin,
 } from '../src/firebaseStore.js';
 import { watchPublicPlayBoard } from '../src/courtStore.js';
 
@@ -31,6 +31,13 @@ const ui = {
   selectedName: $('selectedName'),
   selectedMeta: $('selectedMeta'),
   selectedNote: $('selectedNote'),
+  pinPanel: $('pinPanel'),
+  pinTitle: $('pinTitle'),
+  pinHelp: $('pinHelp'),
+  pinInput: $('pinInput'),
+  pinConfirm: $('pinConfirmInput'),
+  pinConfirmLabel: $('pinConfirmLabel'),
+  pinSubmit: $('pinSubmitButton'),
   selectedActions: $('selectedActions'),
   checkIn: $('checkInButton'),
   sitOut: $('sitOutButton'),
@@ -74,12 +81,15 @@ function initials(name) {
   return String(name || '').split(/\s+/).slice(0, 2).map((part) => part[0] || '').join('').toUpperCase() || '?';
 }
 
-function isMine(entry) {
-  return Boolean(entry && myUid && (entry.id === myUid || entry.ownerUid === myUid));
+function controlsEntry(entry) {
+  if (!entry || !myUid) return false;
+  if (entry.playClaimUid === myUid) return true;
+  if (entry.hasPlayPin !== true && entry.ownerUid === myUid && entry.id === myUid) return true;
+  return false;
 }
 
 function myEntry() {
-  return roster.find((entry) => isMine(entry)) || null;
+  return roster.find((entry) => controlsEntry(entry)) || null;
 }
 
 function nameForPlayerId(playerId) {
@@ -108,7 +118,7 @@ function renderBoard() {
   }
   if (!mine.checkedIn) {
     ui.boardTitle.textContent = 'Not checked in yet';
-    ui.boardDetail.textContent = 'Check in on this phone when you arrive so courts can include you.';
+    ui.boardDetail.textContent = 'Check in when you arrive so courts can include you.';
     return;
   }
   if (assignment?.kind === 'playing') {
@@ -196,7 +206,8 @@ function renderResults() {
     name.textContent = entry.name || 'Player';
     const meta = document.createElement('small');
     const bits = [statusLabel(entry)];
-    if (isMine(entry)) bits.push('You');
+    if (controlsEntry(entry)) bits.push('Unlocked');
+    else if (entry.hasPlayPin) bits.push('PIN protected');
     if (entry.partnerPlayerId) bits.push(`with ${nameForPlayerId(entry.partnerPlayerId)}`);
     else if (entry.partnerRequestToPlayerId) bits.push('pair requested');
     meta.textContent = bits.join(' · ');
@@ -207,10 +218,40 @@ function renderResults() {
   }
 }
 
+function renderPinPanel(entry) {
+  if (!entry) {
+    ui.pinPanel.hidden = true;
+    return false;
+  }
+  if (controlsEntry(entry)) {
+    ui.pinPanel.hidden = true;
+    return true;
+  }
+  ui.pinPanel.hidden = false;
+  ui.pinInput.value = '';
+  ui.pinConfirm.value = '';
+  if (entry.hasPlayPin) {
+    ui.pinTitle.textContent = 'Enter your 4-digit PIN';
+    ui.pinHelp.textContent = 'This unlocks check-in, sit out, and pairing on this phone. Forgot it? Ask an organizer to clear your PIN.';
+    ui.pinConfirmLabel.hidden = true;
+    ui.pinConfirm.hidden = true;
+    ui.pinConfirm.required = false;
+    ui.pinSubmit.textContent = 'Unlock my name';
+  } else {
+    ui.pinTitle.textContent = 'Create a 4-digit PIN';
+    ui.pinHelp.textContent = 'Pin this name so only you can manage it from any phone. You’ll enter this PIN next time you search yourself.';
+    ui.pinConfirmLabel.hidden = false;
+    ui.pinConfirm.hidden = false;
+    ui.pinConfirm.required = true;
+    ui.pinSubmit.textContent = 'Save PIN & unlock';
+  }
+  return false;
+}
+
 function renderPairPanel(entry) {
   ui.pairActions.replaceChildren();
   ui.pairCandidates.replaceChildren();
-  if (!entry || !isMine(entry)) {
+  if (!entry || !controlsEntry(entry)) {
     ui.pairPanel.hidden = true;
     return;
   }
@@ -296,35 +337,38 @@ function selectEntry(entryId) {
   ui.selectedAvatar.textContent = initials(entry.name);
   ui.selectedName.textContent = entry.name || 'Player';
   ui.selectedMeta.textContent = statusLabel(entry);
-  const mine = isMine(entry);
-  ui.selectedActions.hidden = !mine;
-  if (mine) {
-    ui.selectedNote.textContent = 'This is your spot on this phone. Nobody else can sit you out or pair from the player desk.';
+  const unlocked = renderPinPanel(entry);
+  ui.selectedActions.hidden = !unlocked;
+  ui.selectedNote.textContent = unlocked
+    ? 'This name is unlocked on this phone. Sit out, check in, leave, or pair from here.'
+    : (entry.hasPlayPin
+      ? 'Enter the PIN for this name to manage attendance. Other players cannot change it.'
+      : 'Create a PIN to claim this name on the player desk. Organizers can clear a forgotten PIN.');
+  if (unlocked) {
     ui.checkIn.hidden = entry.checkedIn && !entry.sittingOut;
     ui.sitOut.hidden = !entry.checkedIn || entry.sittingOut;
     ui.resume.hidden = !entry.sittingOut;
     ui.leave.hidden = false;
     ui.checkIn.textContent = entry.sittingOut ? 'Check in & resume' : 'Check in';
-  } else {
-    ui.selectedNote.textContent = 'Only the phone that signed up this player can change their status. Ask them to open the player desk link on their phone.';
   }
   renderPairPanel(entry);
 }
 
 async function runAction(action, button) {
-  if (!session || !selectedId || !isMine(roster.find((item) => item.id === selectedId))) {
-    return showAlert('Select your own name to manage attendance.');
+  const entry = roster.find((item) => item.id === selectedId);
+  if (!session || !entry || !controlsEntry(entry)) {
+    return showAlert('Unlock your name with a PIN first.');
   }
   clearAlert();
   const old = button.textContent;
   button.disabled = true;
   try {
-    if (action === 'check-in') await playerCheckIn(session.id);
-    if (action === 'sit-out') await playerSitOut(session.id);
-    if (action === 'resume') await playerResume(session.id);
+    if (action === 'check-in') await playerCheckIn(session.id, entry.id);
+    if (action === 'sit-out') await playerSitOut(session.id, entry.id);
+    if (action === 'resume') await playerResume(session.id, entry.id);
     if (action === 'leave') {
       if (!confirm('Leave for today? This frees your confirmed spot.')) return;
-      await playerLeaveToday(session.id);
+      await playerLeaveToday(session.id, entry.id);
       selectedId = null;
       ui.selected.hidden = true;
       showAlert('You left today’s session.');
@@ -338,7 +382,7 @@ async function runAction(action, button) {
 }
 
 async function runPairAction(action, target, button) {
-  if (!session || !myEntry()) return showAlert('Select your own name to manage pairing.');
+  if (!session || !myEntry()) return showAlert('Unlock your name with a PIN first.');
   clearAlert();
   const old = button?.textContent;
   if (button) button.disabled = true;
@@ -359,6 +403,30 @@ async function runPairAction(action, target, button) {
   }
 }
 
+async function submitPin() {
+  const entry = roster.find((item) => item.id === selectedId);
+  if (!session || !entry) return showAlert('Select your name first.');
+  clearAlert();
+  const pin = ui.pinInput.value.trim();
+  if (!/^\d{4}$/.test(pin)) return showAlert('Enter a 4-digit PIN.');
+  if (!entry.hasPlayPin) {
+    const confirmPin = ui.pinConfirm.value.trim();
+    if (pin !== confirmPin) return showAlert('PIN confirmation does not match.');
+  }
+  const old = ui.pinSubmit.textContent;
+  ui.pinSubmit.disabled = true;
+  try {
+    if (entry.hasPlayPin) await unlockPlayPin(session.id, entry.id, pin);
+    else await setPlayPin(session.id, entry.id, pin);
+    showAlert(entry.hasPlayPin ? 'Name unlocked on this phone.' : 'PIN saved. Your name is unlocked on this phone.');
+  } catch (error) {
+    showAlert(error.message || 'Could not unlock with that PIN.');
+  } finally {
+    ui.pinSubmit.textContent = old;
+    ui.pinSubmit.disabled = false;
+  }
+}
+
 function refreshAll() {
   renderResults();
   renderInbound();
@@ -375,6 +443,7 @@ ui.pairSearch.addEventListener('input', () => {
   const mine = myEntry();
   if (mine && selectedId === mine.id) renderPairPanel(mine);
 });
+ui.pinSubmit.addEventListener('click', submitPin);
 ui.checkIn.addEventListener('click', (event) => runAction('check-in', event.currentTarget));
 ui.sitOut.addEventListener('click', (event) => runAction('sit-out', event.currentTarget));
 ui.resume.addEventListener('click', (event) => runAction('resume', event.currentTarget));

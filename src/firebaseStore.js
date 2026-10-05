@@ -122,6 +122,20 @@ function directoryRef(playerId) { initializeClient(); return doc(db, 'playerDire
 function entryRef(sessionId, entryId) { initializeClient(); return doc(db, 'sessions', sessionId, 'entries', entryId); }
 function claimRef(sessionId, playerId) { initializeClient(); return doc(db, 'sessions', sessionId, 'playerClaims', playerId); }
 function playerLockRef(sessionId, playerId) { initializeClient(); return doc(db, 'sessions', sessionId, 'playerLocks', playerId); }
+function entryPinRef(sessionId, entryId) {
+  initializeClient();
+  return doc(db, 'sessions', sessionId, 'entryPins', entryId);
+}
+function playClaimRef(sessionId, uid) {
+  initializeClient();
+  return doc(db, 'sessions', sessionId, 'playClaims', uid);
+}
+
+function validPlayPin(value) {
+  const pin = String(value || '').trim();
+  if (!/^\d{4}$/.test(pin)) throw error('Use a 4-digit PIN.');
+  return pin;
+}
 
 function normalizedSession(snapshot) {
   if (!snapshot?.exists()) return null;
@@ -188,6 +202,8 @@ function normalizedEntry(snapshot, players = new Map()) {
     checkedOutAt: timestamp(value.checkedOutAt),
     partnerPlayerId: value.partnerPlayerId || null,
     partnerRequestToPlayerId: value.partnerRequestToPlayerId || null,
+    hasPlayPin: value.hasPlayPin === true,
+    playClaimUid: value.playClaimUid || null,
   };
 }
 
@@ -950,27 +966,165 @@ export async function setEntrySittingOut(sessionId, entryId, sittingOut = true) 
   return { sittingOut: sittingOut === true };
 }
 
-async function playerAttendanceTransaction(sessionId, mutate) {
+function assertPlayerControls(entryData, user, entryId) {
+  if (!entryData || entryData.status !== 'confirmed') {
+    throw error('Your spot must be confirmed before you can manage it.');
+  }
+  if (entryData.playClaimUid === user.uid) return;
+  if (entryData.hasPlayPin !== true && entryData.ownerUid === user.uid && entryId === user.uid) return;
+  throw error('Unlock this name with your PIN first.', 'permission-denied');
+}
+
+async function readMyPlayClaim(transaction, sessionId, user) {
+  const claim = await transaction.get(playClaimRef(sessionId, user.uid));
+  if (claim.exists()) return claim.data();
+  // Legacy same-phone signup: entry id is the anonymous uid and no PIN yet.
+  const legacy = await transaction.get(entryRef(sessionId, user.uid));
+  if (legacy.exists() && legacy.data().status === 'confirmed' &&
+      legacy.data().hasPlayPin !== true && legacy.data().ownerUid === user.uid) {
+    return { entryId: user.uid, playerId: legacy.data().playerId || null };
+  }
+  return null;
+}
+
+async function playerAttendanceTransaction(sessionId, entryId, mutate) {
   const user = await ensurePublicAuth();
-  if (!user.isAnonymous) throw error('Open your signup link on this phone to manage attendance.', 'auth-required');
+  if (!user.isAnonymous) throw error('Open the player desk link to manage attendance.', 'auth-required');
+  const id = String(entryId || '').trim();
+  if (!id || id.includes('/')) throw error('Select your name first.');
   await withContentionRetries(() => runTransaction(db, async (transaction) => {
     const sRef = sessionRef(sessionId);
-    const eRef = entryRef(sessionId, user.uid);
+    const eRef = entryRef(sessionId, id);
     const [session, entry] = await Promise.all([transaction.get(sRef), transaction.get(eRef)]);
     if (!session.exists() || !session.data().open) throw error('This session is closed.');
-    if (!entry.exists() || entry.data().status !== 'confirmed') {
-      throw error('Your spot must be confirmed before you can check in.');
-    }
-    if (entry.data().ownerUid && entry.data().ownerUid !== user.uid) {
-      throw error('This signup belongs to another phone.', 'permission-denied');
-    }
-    mutate({ transaction, session, entry, sRef, eRef, user });
+    if (!entry.exists()) throw error('Reservation not found.', 'not-found');
+    assertPlayerControls(entry.data(), user, id);
+    mutate({ transaction, session, entry, sRef, eRef, user, entryId: id });
   }));
 }
 
+/** Create a 4-digit PIN the first time you claim a confirmed name on /play. */
+export async function setPlayPin(sessionId, entryId, pin) {
+  const user = await ensurePublicAuth();
+  if (!user.isAnonymous) throw error('Open the player desk link to set a PIN.', 'auth-required');
+  const id = String(entryId || '').trim();
+  if (!id || id.includes('/')) throw error('Select your name first.');
+  const code = validPlayPin(pin);
+  await withContentionRetries(() => runTransaction(db, async (transaction) => {
+    const eRef = entryRef(sessionId, id);
+    const pinRef = entryPinRef(sessionId, id);
+    const claimRefDoc = playClaimRef(sessionId, user.uid);
+    const [entry, pinDoc, existingClaim] = await Promise.all([
+      transaction.get(eRef), transaction.get(pinRef), transaction.get(claimRefDoc),
+    ]);
+    if (!entry.exists() || entry.data().status !== 'confirmed') {
+      throw error('Only confirmed players can set a desk PIN.');
+    }
+    if (pinDoc.exists() || entry.data().hasPlayPin === true) {
+      throw error('This name already has a PIN. Enter it to unlock, or ask an organizer to clear it.');
+    }
+    if (existingClaim.exists() && existingClaim.data().entryId && existingClaim.data().entryId !== id) {
+      const previous = await transaction.get(entryRef(sessionId, existingClaim.data().entryId));
+      if (previous.exists() && previous.data().playClaimUid === user.uid) {
+        transaction.update(previous.ref, {
+          playClaimUid: null,
+          updatedAt: serverTimestamp(),
+        });
+      }
+    }
+    const playerId = entry.data().playerId || null;
+    transaction.set(pinRef, {
+      pin: code,
+      claimUid: user.uid,
+      updatedAt: serverTimestamp(),
+    });
+    transaction.set(claimRefDoc, {
+      entryId: id,
+      playerId,
+      updatedAt: serverTimestamp(),
+    });
+    transaction.update(eRef, {
+      hasPlayPin: true,
+      playClaimUid: user.uid,
+      updatedAt: serverTimestamp(),
+    });
+  }));
+  return { hasPlayPin: true, entryId: id };
+}
+
+/** Unlock a name you already protected with a PIN on this phone. */
+export async function unlockPlayPin(sessionId, entryId, pin) {
+  const user = await ensurePublicAuth();
+  if (!user.isAnonymous) throw error('Open the player desk link to unlock your name.', 'auth-required');
+  const id = String(entryId || '').trim();
+  if (!id || id.includes('/')) throw error('Select your name first.');
+  const code = validPlayPin(pin);
+  await withContentionRetries(() => runTransaction(db, async (transaction) => {
+    const eRef = entryRef(sessionId, id);
+    const pinRef = entryPinRef(sessionId, id);
+    const claimRefDoc = playClaimRef(sessionId, user.uid);
+    const [entry, pinDoc, existingClaim] = await Promise.all([
+      transaction.get(eRef), transaction.get(pinRef), transaction.get(claimRefDoc),
+    ]);
+    if (!entry.exists() || entry.data().status !== 'confirmed') {
+      throw error('Only confirmed players can unlock the desk.');
+    }
+    if (!pinDoc.exists()) throw error('No PIN is set for this name yet. Create one first.');
+    if (pinDoc.data().pin !== code) throw error('That PIN is incorrect.', 'permission-denied');
+    if (existingClaim.exists() && existingClaim.data().entryId && existingClaim.data().entryId !== id) {
+      const previous = await transaction.get(entryRef(sessionId, existingClaim.data().entryId));
+      if (previous.exists() && previous.data().playClaimUid === user.uid) {
+        transaction.update(previous.ref, {
+          playClaimUid: null,
+          updatedAt: serverTimestamp(),
+        });
+      }
+    }
+    const playerId = entry.data().playerId || null;
+    transaction.update(pinRef, {
+      pin: code,
+      claimUid: user.uid,
+      updatedAt: serverTimestamp(),
+    });
+    transaction.set(claimRefDoc, {
+      entryId: id,
+      playerId,
+      updatedAt: serverTimestamp(),
+    });
+    transaction.update(eRef, {
+      hasPlayPin: true,
+      playClaimUid: user.uid,
+      updatedAt: serverTimestamp(),
+    });
+  }));
+  return { unlocked: true, entryId: id };
+}
+
+/** Organizer: clear a forgotten desk PIN so the player can set a new one. */
+export async function clearPlayPin(sessionId, entryId) {
+  await ensureOrganizer();
+  const id = String(entryId || '').trim();
+  if (!id || id.includes('/')) throw error('Entry id is invalid.');
+  await runTransaction(db, async (transaction) => {
+    const eRef = entryRef(sessionId, id);
+    const pinRef = entryPinRef(sessionId, id);
+    const entry = await transaction.get(eRef);
+    if (!entry.exists()) throw error('Reservation not found.', 'not-found');
+    const claimUid = entry.data().playClaimUid || null;
+    transaction.delete(pinRef);
+    if (claimUid) transaction.delete(playClaimRef(sessionId, claimUid));
+    transaction.update(eRef, {
+      hasPlayPin: false,
+      playClaimUid: null,
+      updatedAt: serverTimestamp(),
+    });
+  });
+  return { cleared: true };
+}
+
 /** Player self-serve: arrive and join the waiting pool. */
-export async function playerCheckIn(sessionId) {
-  await playerAttendanceTransaction(sessionId, ({ transaction, entry, sRef, eRef }) => {
+export async function playerCheckIn(sessionId, entryId) {
+  await playerAttendanceTransaction(sessionId, entryId, ({ transaction, entry, sRef, eRef }) => {
     const prior = entry.data();
     if (prior.checkedIn && prior.sittingOut !== true) return;
     const patch = { checkedIn: true, sittingOut: false, updatedAt: serverTimestamp() };
@@ -984,8 +1138,8 @@ export async function playerCheckIn(sessionId) {
 }
 
 /** Player self-serve: stay reserved, skip court draws until resume. */
-export async function playerSitOut(sessionId) {
-  await playerAttendanceTransaction(sessionId, ({ transaction, entry, eRef }) => {
+export async function playerSitOut(sessionId, entryId) {
+  await playerAttendanceTransaction(sessionId, entryId, ({ transaction, entry, eRef }) => {
     const prior = entry.data();
     if (!prior.checkedIn) throw error('Check in first, then sit out when you need a break.');
     transaction.update(eRef, { sittingOut: true, updatedAt: serverTimestamp() });
@@ -994,8 +1148,8 @@ export async function playerSitOut(sessionId) {
 }
 
 /** Player self-serve: return to the waiting pool after sitting out. */
-export async function playerResume(sessionId) {
-  await playerAttendanceTransaction(sessionId, ({ transaction, entry, eRef }) => {
+export async function playerResume(sessionId, entryId) {
+  await playerAttendanceTransaction(sessionId, entryId, ({ transaction, entry, eRef }) => {
     const prior = entry.data();
     if (!prior.checkedIn) throw error('Check in first to rejoin the waiting pool.');
     transaction.update(eRef, { sittingOut: false, updatedAt: serverTimestamp() });
@@ -1004,23 +1158,21 @@ export async function playerResume(sessionId) {
 }
 
 /** Player self-serve: leave for today and free the confirmed spot. */
-export async function playerLeaveToday(sessionId) {
+export async function playerLeaveToday(sessionId, entryId) {
   const user = await ensurePublicAuth();
-  if (!user.isAnonymous) throw error('Open your signup link on this phone to leave the session.', 'auth-required');
-  return closeEntryAsOwner(sessionId, user.uid);
+  if (!user.isAnonymous) throw error('Open the player desk link to leave the session.', 'auth-required');
+  return closeEntryAsClaimed(sessionId, entryId, user);
 }
 
-async function closeEntryAsOwner(sessionId, entryId) {
+async function closeEntryAsClaimed(sessionId, entryId, user) {
+  const id = String(entryId || '').trim();
   const freed = await runTransaction(db, async (transaction) => {
     const sRef = sessionRef(sessionId);
-    const eRef = entryRef(sessionId, entryId);
+    const eRef = entryRef(sessionId, id);
     const [session, entry] = await Promise.all([transaction.get(sRef), transaction.get(eRef)]);
     if (!session.exists() || !entry.exists()) throw error('Reservation not found.', 'not-found');
     const prior = entry.data();
-    if (prior.status !== 'confirmed') throw error('Only a confirmed spot can leave for today.');
-    if (prior.ownerUid && prior.ownerUid !== entryId) {
-      throw error('This signup belongs to another phone.', 'permission-denied');
-    }
+    assertPlayerControls(prior, user, id);
     const claim = prior.playerId ? claimRef(sessionId, prior.playerId) : null;
     const lock = prior.playerId ? await transaction.get(playerLockRef(sessionId, prior.playerId)) : null;
     if (lock?.exists()) throw error('Finish your current game before leaving.');
@@ -1040,14 +1192,16 @@ async function closeEntryAsOwner(sessionId, entryId) {
       updatedAt: serverTimestamp(),
       partnerPlayerId: null,
       partnerRequestToPlayerId: null,
+      playClaimUid: null,
     });
+    transaction.delete(playClaimRef(sessionId, user.uid));
     if (partnerEntry?.exists() && partnerEntry.data().partnerPlayerId === prior.playerId) {
       transaction.update(partnerEntry.ref, {
         partnerPlayerId: null,
         updatedAt: serverTimestamp(),
       });
     }
-    if (existingClaim?.exists() && existingClaim.data().entryId === entryId) transaction.delete(claim);
+    if (existingClaim?.exists() && existingClaim.data().entryId === id) transaction.delete(claim);
     const sessionPatch = {
       confirmedCount: Math.max(0, (session.data().confirmedCount || 0) - 1),
       updatedAt: serverTimestamp(),
@@ -1068,31 +1222,35 @@ async function findConfirmedEntryByPlayerId(transaction, sessionId, playerId) {
   return entry;
 }
 
+async function requireClaimedEntry(transaction, sessionId, user) {
+  const mine = await readMyPlayClaim(transaction, sessionId, user);
+  if (!mine?.entryId) throw error('Unlock your name with a PIN first.');
+  const entry = await transaction.get(entryRef(sessionId, mine.entryId));
+  if (!entry.exists() || entry.data().status !== 'confirmed') {
+    throw error('Your spot must be confirmed before you can pair.');
+  }
+  assertPlayerControls(entry.data(), user, mine.entryId);
+  return { entry, entryId: mine.entryId, playerId: entry.data().playerId || mine.playerId || null };
+}
+
 /** Player desk: ask another confirmed player to lock as doubles partners. Pending stays solo. */
 export async function requestPartner(sessionId, partnerPlayerId) {
   const partnerId = idOfPlayer(partnerPlayerId);
   const user = await ensurePublicAuth();
-  if (!user.isAnonymous) throw error('Open your signup link on this phone to manage pairing.', 'auth-required');
+  if (!user.isAnonymous) throw error('Open the player desk link to manage pairing.', 'auth-required');
   await withContentionRetries(() => runTransaction(db, async (transaction) => {
-    const eRef = entryRef(sessionId, user.uid);
-    const mine = await transaction.get(eRef);
-    if (!mine.exists() || mine.data().status !== 'confirmed') {
-      throw error('Your spot must be confirmed before you can pair.');
-    }
-    const prior = mine.data();
-    if (!prior.playerId) throw error('Pairing needs an approved player profile.');
-    if (prior.ownerUid && prior.ownerUid !== user.uid) {
-      throw error('This signup belongs to another phone.', 'permission-denied');
-    }
+    const { entry, entryId, playerId } = await requireClaimedEntry(transaction, sessionId, user);
+    const prior = entry.data();
+    if (!playerId) throw error('Pairing needs an approved player profile.');
     if (prior.partnerPlayerId) throw error('Unpair your current partner before requesting someone else.');
-    if (partnerId === prior.playerId) throw error('You cannot pair with yourself.');
+    if (partnerId === playerId) throw error('You cannot pair with yourself.');
     const partner = await findConfirmedEntryByPlayerId(transaction, sessionId, partnerId);
     if (!partner) throw error('That player is not confirmed for today.');
     if (partner.data().partnerPlayerId) throw error('That player is already paired.');
     if (partner.data().sittingOut === true || prior.sittingOut === true) {
       throw error('Both players need to be available (not sitting out) to pair.');
     }
-    transaction.update(eRef, {
+    transaction.update(entryRef(sessionId, entryId), {
       partnerRequestToPlayerId: partnerId,
       updatedAt: serverTimestamp(),
     });
@@ -1104,13 +1262,8 @@ export async function requestPartner(sessionId, partnerPlayerId) {
 export async function cancelPartnerRequest(sessionId) {
   const user = await ensurePublicAuth();
   await runTransaction(db, async (transaction) => {
-    const eRef = entryRef(sessionId, user.uid);
-    const mine = await transaction.get(eRef);
-    if (!mine.exists() || mine.data().status !== 'confirmed') throw error('Reservation not found.');
-    if (mine.data().ownerUid && mine.data().ownerUid !== user.uid) {
-      throw error('This signup belongs to another phone.', 'permission-denied');
-    }
-    transaction.update(eRef, {
+    const { entryId } = await requireClaimedEntry(transaction, sessionId, user);
+    transaction.update(entryRef(sessionId, entryId), {
       partnerRequestToPlayerId: null,
       updatedAt: serverTimestamp(),
     });
@@ -1121,33 +1274,29 @@ export async function cancelPartnerRequest(sessionId) {
 /** Player desk: approve an inbound pair request and lock both sides. */
 export async function approvePartnerRequest(sessionId, requesterEntryId) {
   const user = await ensurePublicAuth();
-  if (!user.isAnonymous) throw error('Open your signup link on this phone to manage pairing.', 'auth-required');
+  if (!user.isAnonymous) throw error('Open the player desk link to manage pairing.', 'auth-required');
   const requesterId = String(requesterEntryId || '').trim();
   if (!requesterId || requesterId.includes('/')) throw error('Request is invalid.');
   await withContentionRetries(() => runTransaction(db, async (transaction) => {
-    const myRef = entryRef(sessionId, user.uid);
+    const { entry, entryId, playerId } = await requireClaimedEntry(transaction, sessionId, user);
     const theirRef = entryRef(sessionId, requesterId);
-    const [mine, theirs] = await Promise.all([transaction.get(myRef), transaction.get(theirRef)]);
-    if (!mine.exists() || mine.data().status !== 'confirmed') throw error('Your spot must be confirmed.');
+    const theirs = await transaction.get(theirRef);
     if (!theirs.exists() || theirs.data().status !== 'confirmed') throw error('That request is no longer available.');
-    const me = mine.data();
+    const me = entry.data();
     const them = theirs.data();
-    if (me.ownerUid && me.ownerUid !== user.uid) {
-      throw error('This signup belongs to another phone.', 'permission-denied');
-    }
-    if (!me.playerId || !them.playerId) throw error('Both players need approved profiles to pair.');
-    if (them.partnerRequestToPlayerId !== me.playerId) {
+    if (!playerId || !them.playerId) throw error('Both players need approved profiles to pair.');
+    if (them.partnerRequestToPlayerId !== playerId) {
       throw error('That pair request was cancelled or already handled.');
     }
     if (me.partnerPlayerId || them.partnerPlayerId) {
       throw error('One of you is already paired. Decline and stay solo, or unpair first.');
     }
     transaction.update(theirRef, {
-      partnerPlayerId: me.playerId,
+      partnerPlayerId: playerId,
       partnerRequestToPlayerId: null,
       updatedAt: serverTimestamp(),
     });
-    transaction.update(myRef, {
+    transaction.update(entryRef(sessionId, entryId), {
       partnerPlayerId: them.playerId,
       partnerRequestToPlayerId: null,
       updatedAt: serverTimestamp(),
@@ -1159,20 +1308,15 @@ export async function approvePartnerRequest(sessionId, requesterEntryId) {
 /** Player desk: decline an inbound pair request; both stay solo. */
 export async function declinePartnerRequest(sessionId, requesterEntryId) {
   const user = await ensurePublicAuth();
-  if (!user.isAnonymous) throw error('Open your signup link on this phone to manage pairing.', 'auth-required');
+  if (!user.isAnonymous) throw error('Open the player desk link to manage pairing.', 'auth-required');
   const requesterId = String(requesterEntryId || '').trim();
   if (!requesterId || requesterId.includes('/')) throw error('Request is invalid.');
   await runTransaction(db, async (transaction) => {
-    const myRef = entryRef(sessionId, user.uid);
+    const { playerId } = await requireClaimedEntry(transaction, sessionId, user);
     const theirRef = entryRef(sessionId, requesterId);
-    const [mine, theirs] = await Promise.all([transaction.get(myRef), transaction.get(theirRef)]);
-    if (!mine.exists() || mine.data().status !== 'confirmed') throw error('Your spot must be confirmed.');
+    const theirs = await transaction.get(theirRef);
     if (!theirs.exists()) return;
-    const me = mine.data();
-    if (me.ownerUid && me.ownerUid !== user.uid) {
-      throw error('This signup belongs to another phone.', 'permission-denied');
-    }
-    if (theirs.data().partnerRequestToPlayerId !== me.playerId) return;
+    if (theirs.data().partnerRequestToPlayerId !== playerId) return;
     transaction.update(theirRef, {
       partnerRequestToPlayerId: null,
       updatedAt: serverTimestamp(),
@@ -1184,29 +1328,24 @@ export async function declinePartnerRequest(sessionId, requesterEntryId) {
 /** Player desk: clear a locked doubles pair; both return to solo for draws. */
 export async function clearMyPartner(sessionId) {
   const user = await ensurePublicAuth();
-  if (!user.isAnonymous) throw error('Open your signup link on this phone to manage pairing.', 'auth-required');
+  if (!user.isAnonymous) throw error('Open the player desk link to manage pairing.', 'auth-required');
   await withContentionRetries(() => runTransaction(db, async (transaction) => {
-    const myRef = entryRef(sessionId, user.uid);
-    const mine = await transaction.get(myRef);
-    if (!mine.exists() || mine.data().status !== 'confirmed') throw error('Your spot must be confirmed.');
-    const me = mine.data();
-    if (me.ownerUid && me.ownerUid !== user.uid) {
-      throw error('This signup belongs to another phone.', 'permission-denied');
-    }
+    const { entry, entryId, playerId } = await requireClaimedEntry(transaction, sessionId, user);
+    const me = entry.data();
     if (!me.partnerPlayerId) {
-      transaction.update(myRef, {
+      transaction.update(entryRef(sessionId, entryId), {
         partnerRequestToPlayerId: null,
         updatedAt: serverTimestamp(),
       });
       return;
     }
     const partner = await findConfirmedEntryByPlayerId(transaction, sessionId, me.partnerPlayerId);
-    transaction.update(myRef, {
+    transaction.update(entryRef(sessionId, entryId), {
       partnerPlayerId: null,
       partnerRequestToPlayerId: null,
       updatedAt: serverTimestamp(),
     });
-    if (partner?.exists() && partner.data().partnerPlayerId === me.playerId) {
+    if (partner?.exists() && partner.data().partnerPlayerId === playerId) {
       transaction.update(partner.ref, {
         partnerPlayerId: null,
         updatedAt: serverTimestamp(),
@@ -1214,6 +1353,20 @@ export async function clearMyPartner(sessionId) {
     }
   }));
   return { partnerPlayerId: null };
+}
+
+/** Organizer: soft-delete a duplicate directory player (keeps history refs intact). */
+export async function deletePlayer(playerId) {
+  await ensureOrganizer();
+  const id = idOfPlayer(playerId);
+  await runTransaction(db, async (transaction) => {
+    const reference = playerRef(id);
+    const player = await transaction.get(reference);
+    if (!player.exists()) throw error('Player not found.', 'not-found');
+    transaction.update(reference, { active: false, updatedAt: serverTimestamp() });
+    transaction.delete(directoryRef(id));
+  });
+  return { deleted: true };
 }
 
 export async function reservePlayer(sessionId, playerId, options = {}) {
