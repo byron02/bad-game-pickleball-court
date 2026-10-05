@@ -365,7 +365,7 @@ input[type="datetime-local"].input {
   box-shadow: none;
 }
 .admin-main-column, .admin-side-column { display: grid; gap: 17px; }
-.panel { background: white; border: 1px solid var(--line); border-radius: 16px; padding: 22px; box-shadow: 0 5px 18px rgb(16 42 72 / 3%); }
+.panel { background: white; border: 1px solid var(--line); border-radius: 16px; padding: 22px; box-shadow: 0 5px 18px rgb(16 42 72 / 3%); min-width: 0; overflow-x: clip; }
 .directory-panel .directory-list { max-height: none; }
 .courts-panel { margin-top: 0; }
 .panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 15px; margin-bottom: 18px; }
@@ -390,7 +390,6 @@ input[type="datetime-local"].input {
 .settings-panel .button-wide { margin-top: 16px; }
 .settings-panel form,
 .settings-panel .input { max-width: 100%; min-width: 0; }
-.panel { min-width: 0; overflow-x: clip; }
 .share-box { display: grid; gap: 8px; margin-top: 25px; border-top: 1px solid var(--line); padding-top: 18px; }
 .share-box code { display: block; overflow-wrap: anywhere; color: var(--blue); background: var(--blue-pale); border-radius: 8px; padding: 9px 10px; font-size: 11px; }
 .share-box .button { justify-self: start; }
