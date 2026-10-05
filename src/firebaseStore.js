@@ -447,6 +447,11 @@ export async function approveEntry(sessionId, entryId, options = {}) {
         ? options.skillLevel
         : request.skillLevel,
     );
+    const name = validName(
+      Object.prototype.hasOwnProperty.call(options, 'name')
+        ? options.name
+        : request.name,
+    );
     const existingPlayer = request.playerId ? playerRef(request.playerId) : null;
     const freshPlayer = existingPlayer || doc(collection(db, 'players'));
     const player = existingPlayer ? await transaction.get(existingPlayer) : null;
@@ -459,7 +464,6 @@ export async function approveEntry(sessionId, entryId, options = {}) {
     const confirmed = session.data().confirmedCount < session.data().capacity;
     const status = confirmed ? 'confirmed' : 'waitlisted';
     if (!existingPlayer) {
-      const name = validName(request.name);
       const profile = {
         name, nameLower: name.toLocaleLowerCase(), skillLevel,
         division: validDivision(request.division),
@@ -470,16 +474,21 @@ export async function approveEntry(sessionId, entryId, options = {}) {
       transaction.set(directoryRef(freshPlayer.id), directoryPayload(profile));
     } else {
       const photoData = request.photoData ? validPhoto(request.photoData) : player.data().photoData || null;
-      const playerPatch = { skillLevel, updatedAt: serverTimestamp() };
+      const playerPatch = {
+        name,
+        nameLower: name.toLocaleLowerCase(),
+        skillLevel,
+        updatedAt: serverTimestamp(),
+      };
       if (request.photoData) playerPatch.photoData = photoData;
       transaction.update(existingPlayer, playerPatch);
       transaction.set(directoryRef(freshPlayer.id), directoryPayload(player.data(), {
-        skillLevel, photoData,
+        name, nameLower: name.toLocaleLowerCase(), skillLevel, photoData,
       }), { merge: true });
     }
     transaction.set(claim, { entryId, createdAt: serverTimestamp() });
     transaction.update(eRef, {
-      playerId: freshPlayer.id, status, skillLevel, approvedAt: serverTimestamp(),
+      playerId: freshPlayer.id, name, status, skillLevel, approvedAt: serverTimestamp(),
       reviewedAt: serverTimestamp(), updatedAt: serverTimestamp(),
     });
     transaction.update(sRef, {
@@ -487,7 +496,7 @@ export async function approveEntry(sessionId, entryId, options = {}) {
       waitlistCount: (session.data().waitlistCount || 0) + (confirmed ? 0 : 1),
       updatedAt: serverTimestamp(),
     });
-    return { status, playerId: freshPlayer.id, skillLevel };
+    return { status, playerId: freshPlayer.id, skillLevel, name };
   });
   return result;
 }

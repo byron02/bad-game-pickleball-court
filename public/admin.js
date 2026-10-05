@@ -36,6 +36,7 @@ let unsubscribeDashboard = null;
 let activeShareLink = '';
 let currentView = 'overview';
 const pendingSkillByEntry = new Map();
+const pendingNameByEntry = new Map();
 const SKILL_LEVELS = ['beginner', 'intermediate', 'advanced'];
 const VIEWS = ['overview', 'requests', 'roster', 'directory', 'courts'];
 const PAGE_SIZE = 12;
@@ -120,6 +121,24 @@ function recordLabel(player) {
   return `${wins} ${wins === 1 ? 'win' : 'wins'} · ${losses} ${losses === 1 ? 'loss' : 'losses'}`;
 }
 
+function nameInput(entryId, current) {
+  const label = node('label', 'entry-skill');
+  label.append(node('span', '', 'Correct name'));
+  const input = document.createElement('input');
+  input.className = 'input entry-skill-select';
+  input.type = 'text';
+  input.maxLength = 60;
+  input.required = true;
+  input.dataset.nameFor = entryId;
+  input.setAttribute('aria-label', 'Correct player name');
+  input.value = pendingNameByEntry.get(entryId) || current || '';
+  input.addEventListener('input', () => {
+    pendingNameByEntry.set(entryId, input.value);
+  });
+  label.append(input);
+  return label;
+}
+
 function skillSelect(entryId, current) {
   const label = node('label', 'entry-skill');
   label.append(node('span', '', 'Set skill level'));
@@ -185,10 +204,11 @@ function renderEntry(entry, kind) {
   }
   body.append(top);
   if (kind === 'pending') {
+    body.append(nameInput(entry.id, entry.name));
     body.append(skillSelect(entry.id, entry.skillLevel));
     const details = [];
     if (entry.division && entry.division !== 'unspecified') details.push(entry.division);
-    details.push('Change skill if needed, then approve');
+    details.push('Fix name or skill if needed, then approve');
     body.append(node('div', 'entry-meta', details.join(' · ')));
   } else {
     const details = [entry.skillLevel || 'Skill not set'];
@@ -257,6 +277,9 @@ function renderList(container, items, kind, emptyMessage, options = {}) {
   const focusedSkillId = kind === 'pending' && active?.matches?.('select[data-skill-for]')
     ? active.dataset.skillFor
     : null;
+  const focusedNameId = kind === 'pending' && active?.matches?.('input[data-name-for]')
+    ? active.dataset.nameFor
+    : null;
   container.replaceChildren();
   const pageKey = options.pageKey || null;
   const pager = options.pager || null;
@@ -271,7 +294,9 @@ function renderList(container, items, kind, emptyMessage, options = {}) {
   }
   for (const entry of pageable.items) container.append(renderEntry(entry, kind));
   if (pageKey) renderPager(pager, pageKey, pageable);
-  if (focusedSkillId) {
+  if (focusedNameId) {
+    container.querySelector(`input[data-name-for="${CSS.escape(focusedNameId)}"]`)?.focus();
+  } else if (focusedSkillId) {
     container.querySelector(`select[data-skill-for="${CSS.escape(focusedSkillId)}"]`)?.focus();
   }
 }
@@ -392,6 +417,9 @@ function renderDashboard(data) {
   for (const entryId of [...pendingSkillByEntry.keys()]) {
     if (!pendingIds.has(entryId)) pendingSkillByEntry.delete(entryId);
   }
+  for (const entryId of [...pendingNameByEntry.keys()]) {
+    if (!pendingIds.has(entryId)) pendingNameByEntry.delete(entryId);
+  }
   const confirmedCount = Number(session.confirmedCount ?? confirmed.length);
   const checkedInCount = Number(session.checkedInCount ?? confirmed.filter((entry) => entry.checkedIn).length);
   const pendingCount = Number(session.pendingCount ?? pending.length);
@@ -505,9 +533,20 @@ async function runEntryAction(action, entryId, button) {
   try {
     if (action === 'approve') {
       const skillSelect = button.closest('.entry-row')?.querySelector('select[data-skill-for]');
+      const nameField = button.closest('.entry-row')?.querySelector('input[data-name-for]');
       const skillLevel = skillSelect?.value || pendingSkillByEntry.get(entryId);
-      await approveEntry(session.id, entryId, skillLevel ? { skillLevel } : {});
+      const name = (nameField?.value || pendingNameByEntry.get(entryId) || '').trim();
+      if (nameField && nameField.value.trim().length < 2) {
+        showAlert('Enter a name with at least 2 characters before approving.');
+        nameField.focus();
+        return;
+      }
+      await approveEntry(session.id, entryId, {
+        ...(skillLevel ? { skillLevel } : {}),
+        ...(name ? { name } : {}),
+      });
       pendingSkillByEntry.delete(entryId);
+      pendingNameByEntry.delete(entryId);
     } else {
       await fn(session.id, entryId);
     }
