@@ -144,6 +144,9 @@
             <h1>Players</h1>
             <p>Check in confirmed players above, then search the full list below to fill an open spot.</p>
           </div>
+          <div class="head-actions">
+            <button id="addPlayerButton" class="button button-primary" type="button">+ Add player</button>
+          </div>
         </section>
         <div class="admin-grid players-desk">
           <section class="panel">
@@ -181,6 +184,9 @@
             <div class="eyebrow">Player database</div>
             <h1>Directory</h1>
             <p>Search approved players, reserve them, or edit skill and division.</p>
+          </div>
+          <div class="head-actions">
+            <button id="addPlayerDirectoryButton" class="button button-primary" type="button">+ Add player</button>
           </div>
         </section>
         <section class="panel directory-panel">
@@ -277,6 +283,33 @@
       <div class="dialog-actions">
         <button id="cancelPartner" class="button button-outline" type="button">Cancel</button>
         <button id="savePartner" class="button button-primary" type="submit">Save pair</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="addPlayerDialog" class="confirm-dialog court-dialog" aria-labelledby="addPlayerDialogTitle">
+    <form id="addPlayerForm">
+      <h2 id="addPlayerDialogTitle">Add player</h2>
+      <p>Create someone who did not use the signup link. They are saved to the directory and can be reserved for today.</p>
+      <label class="field-label" for="addPlayerNameInput">Name</label>
+      <input id="addPlayerNameInput" class="input" type="text" maxlength="60" required placeholder="e.g. Stef Reyes" autocomplete="name">
+      <label class="field-label" for="addPlayerSkillInput">Skill level</label>
+      <select id="addPlayerSkillInput" class="input" required>
+        <option value="beginner">Beginner</option>
+        <option value="intermediate" selected>Intermediate</option>
+        <option value="advanced">Advanced</option>
+      </select>
+      <label class="field-label" for="addPlayerDivisionInput">Division</label>
+      <select id="addPlayerDivisionInput" class="input">
+        <option value="unspecified">Open play only</option>
+        <option value="woman">Woman</option>
+        <option value="man">Man</option>
+      </select>
+      <label class="check-row"><input id="addPlayerReserveInput" type="checkbox" checked> Add to today’s confirmed list</label>
+      <label class="check-row"><input id="addPlayerCheckInInput" type="checkbox"> Check in now</label>
+      <div class="dialog-actions">
+        <button id="cancelAddPlayer" class="button button-outline" type="button">Cancel</button>
+        <button id="saveAddPlayer" class="button button-primary" type="submit">Save player</button>
       </div>
     </form>
   </dialog>

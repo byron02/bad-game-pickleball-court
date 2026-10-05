@@ -2,6 +2,7 @@ import {
   getAdminDashboard, watchAdminDashboard, signInOrganizerWithGoogle,
   signOutOrganizer, approveEntry, rejectEntry, removeEntry, checkInEntry, checkOutEntry,
   reservePlayer, updatePlayer, updateSession, resetSession, setEntryPartner,
+  createAndReservePlayer,
 } from '../src/firebaseStore.js';
 import { initCourtsUI } from './courts-ui.js';
 

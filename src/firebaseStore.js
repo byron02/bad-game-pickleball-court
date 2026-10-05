@@ -733,6 +733,88 @@ export async function reservePlayer(sessionId, playerId, options = {}) {
   return { entry: result };
 }
 
+/** Create a new directory player and optionally put them on today's roster. */
+export async function createAndReservePlayer(sessionId, {
+  name,
+  skillLevel,
+  division = 'unspecified',
+  reserve = true,
+  checkIn = false,
+} = {}) {
+  await ensureOrganizer();
+  const playerName = validName(name);
+  const skill = validSkill(skillLevel);
+  const gender = validDivision(division);
+  const playerDoc = doc(collection(db, 'players'));
+  const entryId = doc(collection(db, 'sessions', sessionId, 'entries')).id;
+
+  const result = await withContentionRetries(() => runTransaction(db, async (transaction) => {
+    const sRef = sessionRef(sessionId);
+    const session = await transaction.get(sRef);
+    if (!session.exists() || session.data().open !== true) throw error('This session is closed.');
+
+    const profile = {
+      name: playerName,
+      nameLower: playerName.toLocaleLowerCase(),
+      skillLevel: skill,
+      division: gender,
+      photoData: null,
+      active: true,
+      wins: 0,
+      losses: 0,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      source: 'organizer',
+    };
+    transaction.set(playerDoc, profile);
+    transaction.set(directoryRef(playerDoc.id), directoryPayload(profile));
+
+    if (!reserve) {
+      return { playerId: playerDoc.id, entry: null };
+    }
+
+    const hasOpenSpot = session.data().confirmedCount < session.data().capacity;
+    if (checkIn && !hasOpenSpot) {
+      throw error('No open confirmed spots left. Reserve to the waitlist instead.');
+    }
+    const status = hasOpenSpot ? 'confirmed' : 'waitlisted';
+    const shouldCheckIn = checkIn && status === 'confirmed';
+    transaction.set(entryRef(sessionId, entryId), {
+      sessionId,
+      ownerUid: null,
+      playerId: playerDoc.id,
+      name: playerName,
+      skillLevel: skill,
+      division: gender,
+      photoData: null,
+      status,
+      checkedIn: shouldCheckIn,
+      source: 'organizer',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      approvedAt: serverTimestamp(),
+      reviewedAt: serverTimestamp(),
+      checkedInAt: shouldCheckIn ? serverTimestamp() : null,
+      checkedOutAt: null,
+    });
+    transaction.set(claimRef(sessionId, playerDoc.id), {
+      entryId,
+      createdAt: serverTimestamp(),
+    });
+    const sessionPatch = { updatedAt: serverTimestamp() };
+    if (status === 'confirmed') sessionPatch.confirmedCount = increment(1);
+    else sessionPatch.waitlistCount = increment(1);
+    if (shouldCheckIn) sessionPatch.checkedInCount = increment(1);
+    transaction.update(sRef, sessionPatch);
+    return {
+      playerId: playerDoc.id,
+      entry: { id: entryId, status, checkedIn: shouldCheckIn },
+    };
+  }));
+
+  return result;
+}
+
 export async function updatePlayer(playerId, changes, sessionId = null) {
   await ensureOrganizer();
   const patch = { updatedAt: serverTimestamp() };

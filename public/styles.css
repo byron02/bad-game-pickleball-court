@@ -304,6 +304,16 @@ h1, h2, h3, p { margin: 0; }
 .skill-fieldset legend { font-size: 12px; font-weight: 800; padding-top: 12px; }
 .skill-fieldset label { display: inline-flex; align-items: center; gap: 5px; color: var(--navy); font-size: 12px; }
 .skill-fieldset input { accent-color: var(--blue); }
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  color: var(--navy);
+  font-size: 13px;
+  font-weight: 650;
+}
+.check-row input { accent-color: var(--blue); width: 16px; height: 16px; }
 .auth-panel { width: min(470px, 100%); margin: 100px auto 0; background: #fff; border: 1px solid var(--line); border-radius: 17px; padding: 30px; box-shadow: var(--shadow); }
 .auth-panel h1 { font-size: 25px; margin-top: 7px; }
 .auth-panel p { color: var(--muted); font-size: 13px; margin-top: 10px; }
