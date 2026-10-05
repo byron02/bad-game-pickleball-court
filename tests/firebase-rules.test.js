@@ -186,16 +186,22 @@ test('player desk can list open courts and own attendance, but not sit someone e
       sittingOut: true,
     }));
 
-    // Wrong PIN cannot unlock Stefanny
+    // Wrong PIN cannot unlock Stefanny once her PIN is committed on the entry.
     await assertSucceeds(setDoc(doc(stef, 'sessions', sessionId, 'entryPins', 'player-two'), {
       pin: '9999', claimUid: 'player-two', updatedAt: serverTimestamp(),
     }));
+    await assertSucceeds(setDoc(doc(stef, 'sessions', sessionId, 'playClaims', 'player-two'), {
+      entryId: 'player-two', playerId: 'p2', updatedAt: serverTimestamp(),
+    }));
+    await assertSucceeds(updateDoc(doc(stef, 'sessions', sessionId, 'entries', 'player-two'), {
+      hasPlayPin: true, playClaimUid: 'player-two',
+    }));
     await assertFails(updateDoc(doc(alex, 'sessions', sessionId, 'entryPins', 'player-two'), {
-      pin: '0000', claimUid: 'player-one',
+      pin: '0000', claimUid: 'player-one', updatedAt: serverTimestamp(),
     }));
     // Correct PIN unlock
     await assertSucceeds(updateDoc(doc(alex, 'sessions', sessionId, 'entryPins', 'player-two'), {
-      pin: '9999', claimUid: 'player-one',
+      pin: '9999', claimUid: 'player-one', updatedAt: serverTimestamp(),
     }));
   });
 

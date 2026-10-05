@@ -368,21 +368,33 @@ service cloud.firestore {
       }
 
       // PIN is never readable by players (get denied). Create sets it; unlock
-      // proves knowledge by sending the same pin back; organizers can delete.
+      // proves knowledge by sending the same pin back on update; organizers can delete.
       match /entryPins/{entryId} {
         allow get, list: if organizer();
         allow create: if anonymousPlayer() &&
           exists(/databases/$(database)/documents/sessions/$(sessionId)/entries/$(entryId)) &&
           get(/databases/$(database)/documents/sessions/$(sessionId)/entries/$(entryId)).data.status == 'confirmed' &&
+          get(/databases/$(database)/documents/sessions/$(sessionId)/entries/$(entryId)).data.hasPlayPin != true &&
           validPlayPin(request.resource.data.pin) &&
           request.resource.data.claimUid == request.auth.uid &&
           request.resource.data.keys().hasOnly(['pin', 'claimUid', 'updatedAt']);
         allow update: if organizer() ||
           (anonymousPlayer() &&
             validPlayPin(request.resource.data.pin) &&
-            request.resource.data.pin == resource.data.pin &&
             request.resource.data.claimUid == request.auth.uid &&
-            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['claimUid', 'updatedAt']));
+            (
+              (
+                // Unlock: prove the existing PIN, then claim this phone.
+                request.resource.data.pin == resource.data.pin &&
+                request.resource.data.diff(resource.data).affectedKeys().hasOnly(['claimUid', 'updatedAt'])
+              ) ||
+              (
+                // Finish a partial create when the entry still has no PIN flag.
+                get(/databases/$(database)/documents/sessions/$(sessionId)/entries/$(entryId)).data.hasPlayPin != true &&
+                request.resource.data.diff(resource.data).affectedKeys()
+                  .hasOnly(['pin', 'claimUid', 'updatedAt'])
+              )
+            ));
         allow delete: if organizer();
       }
 

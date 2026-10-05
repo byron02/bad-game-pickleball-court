@@ -24,6 +24,7 @@ import {
   runTransaction,
   serverTimestamp,
   setDoc,
+  updateDoc,
   startAt,
   endAt,
   where,
@@ -1040,45 +1041,52 @@ export async function setPlayPin(sessionId, entryId, pin) {
   const id = String(entryId || '').trim();
   if (!id || id.includes('/')) throw error('Select your name first.');
   const code = validPlayPin(pin);
-  await withContentionRetries(() => runTransaction(db, async (transaction) => {
-    const eRef = entryRef(sessionId, id);
-    const pinRef = entryPinRef(sessionId, id);
-    const claimRefDoc = playClaimRef(sessionId, user.uid);
-    const [entry, pinDoc, existingClaim] = await Promise.all([
-      transaction.get(eRef), transaction.get(pinRef), transaction.get(claimRefDoc),
-    ]);
-    if (!entry.exists() || entry.data().status !== 'confirmed') {
-      throw error('Only confirmed players can set a desk PIN.');
+
+  // Do not read entryPins here — players cannot get that doc. Write the PIN,
+  // then the claim, then mirror the claim onto the entry.
+  const entrySnap = await getDoc(entryRef(sessionId, id));
+  if (!entrySnap.exists() || entrySnap.data().status !== 'confirmed') {
+    throw error('Only confirmed players can set a desk PIN.');
+  }
+  if (entrySnap.data().hasPlayPin === true) {
+    throw error('This name already has a PIN. Enter it to unlock, or ask an organizer to clear it.');
+  }
+  const playerId = entrySnap.data().playerId || null;
+  const existingClaim = await getDoc(playClaimRef(sessionId, user.uid));
+  if (existingClaim.exists() && existingClaim.data().entryId && existingClaim.data().entryId !== id) {
+    try {
+      await updateDoc(entryRef(sessionId, existingClaim.data().entryId), {
+        playClaimUid: null,
+        updatedAt: serverTimestamp(),
+      });
+    } catch {
+      // Previous claim may already be cleared.
     }
-    if (pinDoc.exists() || entry.data().hasPlayPin === true) {
-      throw error('This name already has a PIN. Enter it to unlock, or ask an organizer to clear it.');
-    }
-    if (existingClaim.exists() && existingClaim.data().entryId && existingClaim.data().entryId !== id) {
-      const previous = await transaction.get(entryRef(sessionId, existingClaim.data().entryId));
-      if (previous.exists() && previous.data().playClaimUid === user.uid) {
-        transaction.update(previous.ref, {
-          playClaimUid: null,
-          updatedAt: serverTimestamp(),
-        });
-      }
-    }
-    const playerId = entry.data().playerId || null;
-    transaction.set(pinRef, {
+  }
+
+  try {
+    await setDoc(entryPinRef(sessionId, id), {
       pin: code,
       claimUid: user.uid,
       updatedAt: serverTimestamp(),
     });
-    transaction.set(claimRefDoc, {
-      entryId: id,
-      playerId,
-      updatedAt: serverTimestamp(),
-    });
-    transaction.update(eRef, {
-      hasPlayPin: true,
-      playClaimUid: user.uid,
-      updatedAt: serverTimestamp(),
-    });
-  }));
+  } catch (cause) {
+    if (String(cause?.code || '').includes('permission-denied')) {
+      throw error('This name already has a PIN. Enter it to unlock, or ask an organizer to clear it.', 'permission-denied');
+    }
+    throw cause;
+  }
+
+  await setDoc(playClaimRef(sessionId, user.uid), {
+    entryId: id,
+    playerId,
+    updatedAt: serverTimestamp(),
+  });
+  await updateDoc(entryRef(sessionId, id), {
+    hasPlayPin: true,
+    playClaimUid: user.uid,
+    updatedAt: serverTimestamp(),
+  });
   return { hasPlayPin: true, entryId: id };
 }
 
@@ -1089,44 +1097,53 @@ export async function unlockPlayPin(sessionId, entryId, pin) {
   const id = String(entryId || '').trim();
   if (!id || id.includes('/')) throw error('Select your name first.');
   const code = validPlayPin(pin);
-  await withContentionRetries(() => runTransaction(db, async (transaction) => {
-    const eRef = entryRef(sessionId, id);
-    const pinRef = entryPinRef(sessionId, id);
-    const claimRefDoc = playClaimRef(sessionId, user.uid);
-    const [entry, pinDoc, existingClaim] = await Promise.all([
-      transaction.get(eRef), transaction.get(pinRef), transaction.get(claimRefDoc),
-    ]);
-    if (!entry.exists() || entry.data().status !== 'confirmed') {
-      throw error('Only confirmed players can unlock the desk.');
+
+  const entrySnap = await getDoc(entryRef(sessionId, id));
+  if (!entrySnap.exists() || entrySnap.data().status !== 'confirmed') {
+    throw error('Only confirmed players can unlock the desk.');
+  }
+  if (entrySnap.data().hasPlayPin !== true) {
+    throw error('No PIN is set for this name yet. Create one first.');
+  }
+  const playerId = entrySnap.data().playerId || null;
+  const existingClaim = await getDoc(playClaimRef(sessionId, user.uid));
+  if (existingClaim.exists() && existingClaim.data().entryId && existingClaim.data().entryId !== id) {
+    try {
+      await updateDoc(entryRef(sessionId, existingClaim.data().entryId), {
+        playClaimUid: null,
+        updatedAt: serverTimestamp(),
+      });
+    } catch {
+      // Previous claim may already be cleared.
     }
-    if (!pinDoc.exists()) throw error('No PIN is set for this name yet. Create one first.');
-    if (pinDoc.data().pin !== code) throw error('That PIN is incorrect.', 'permission-denied');
-    if (existingClaim.exists() && existingClaim.data().entryId && existingClaim.data().entryId !== id) {
-      const previous = await transaction.get(entryRef(sessionId, existingClaim.data().entryId));
-      if (previous.exists() && previous.data().playClaimUid === user.uid) {
-        transaction.update(previous.ref, {
-          playClaimUid: null,
-          updatedAt: serverTimestamp(),
-        });
-      }
-    }
-    const playerId = entry.data().playerId || null;
-    transaction.update(pinRef, {
+  }
+
+  try {
+    // Prove the PIN by writing it back; rules compare against the stored value.
+    // Players cannot read entryPins, so this must not get() that document.
+    await updateDoc(entryPinRef(sessionId, id), {
       pin: code,
       claimUid: user.uid,
       updatedAt: serverTimestamp(),
     });
-    transaction.set(claimRefDoc, {
-      entryId: id,
-      playerId,
-      updatedAt: serverTimestamp(),
-    });
-    transaction.update(eRef, {
-      hasPlayPin: true,
-      playClaimUid: user.uid,
-      updatedAt: serverTimestamp(),
-    });
-  }));
+  } catch (cause) {
+    if (String(cause?.code || '').includes('permission-denied') ||
+        String(cause?.code || '').includes('not-found')) {
+      throw error('That PIN is incorrect.', 'permission-denied');
+    }
+    throw cause;
+  }
+
+  await setDoc(playClaimRef(sessionId, user.uid), {
+    entryId: id,
+    playerId,
+    updatedAt: serverTimestamp(),
+  });
+  await updateDoc(entryRef(sessionId, id), {
+    hasPlayPin: true,
+    playClaimUid: user.uid,
+    updatedAt: serverTimestamp(),
+  });
   return { unlocked: true, entryId: id };
 }
 
