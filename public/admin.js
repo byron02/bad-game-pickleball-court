@@ -14,7 +14,7 @@ const ui = {
   confirmed: $('adminConfirmed'), capacity: $('adminCapacity'), fill: $('adminCapacityFill'), availability: $('adminAvailability'),
   dateLabel: $('adminDateLabel'), checkedIn: $('checkedInMetric'), pending: $('pendingMetric'), waitlist: $('waitlistMetric'), open: $('openMetric'),
   pendingCount: $('pendingCountLabel'), pendingList: $('pendingList'), confirmedList: $('confirmedList'),
-  waitlistCount: $('waitlistCountLabel'), waitlistList: $('waitlistList'),
+  waitlistCount: $('waitlistCountLabel'), waitlistList: $('waitlistList'), waitlistBlock: $('waitlistBlock'),
   todayCount: $('todayCountLabel'), todaySpotsNote: $('todaySpotsNote'),
   todayPlayersList: $('todayPlayersList'), todayWaitlistList: $('todayWaitlistList'),
   todayWaitlistCount: $('todayWaitlistCountLabel'), gotoPlayers: $('gotoPlayersButton'),
@@ -257,19 +257,23 @@ function renderFillList() {
     return;
   }
   for (const player of available) {
-    const row = node('div', 'directory-row');
-    row.append(avatar(player));
+    const row = node('div', 'fill-row');
+    const head = node('div', 'fill-row-head');
+    head.append(avatar(player));
     const info = node('div', 'person-info');
     info.append(node('strong', '', player.name || 'Unnamed player'));
     info.append(node('small', '', [player.skillLevel, player.division && player.division !== 'unspecified' ? player.division : ''].filter(Boolean).join(' · ') || 'Player'));
     info.append(node('small', 'player-record', recordLabel(player)));
-    row.append(info);
+    head.append(info);
+    row.append(head);
+    const actions = node('div', 'fill-row-actions');
     if (openSpots > 0) {
-      row.append(actionButton('Add & check in', 'reserve-checkin', player.id, 'button-primary'));
-      row.append(actionButton('Reserve', 'reserve', player.id, 'button-outline'));
+      actions.append(actionButton('Add & check in', 'reserve-checkin', player.id, 'button-primary'));
+      actions.append(actionButton('Reserve', 'reserve', player.id, 'button-outline'));
     } else {
-      row.append(actionButton('Waitlist', 'reserve', player.id, 'button-primary'));
+      actions.append(actionButton('Waitlist', 'reserve', player.id, 'button-primary'));
     }
+    row.append(actions);
     ui.rosterFillList.append(row);
   }
 }
@@ -335,11 +339,12 @@ function renderDashboard(data) {
   ui.waitlist.textContent = String(waitlistCount);
   ui.open.textContent = String(open);
   ui.pendingCount.textContent = String(pendingCount);
-  ui.waitlistCount.textContent = String(waitlistCount);
+  if (ui.waitlistCount) ui.waitlistCount.textContent = String(waitlistCount);
+  if (ui.waitlistBlock) ui.waitlistBlock.hidden = waitlist.length === 0;
   syncPendingBadges(pendingCount);
   renderList(ui.pendingList, pending, 'pending', 'No signup requests to review.');
   renderList(ui.confirmedList, confirmed, 'confirmed', 'No reserved players yet. Share the signup link or add a known player.');
-  renderList(ui.waitlistList, waitlist, 'waitlist', 'No players on the waitlist.');
+  if (ui.waitlistList) renderList(ui.waitlistList, waitlist, 'waitlist', 'No players on the waitlist.');
   renderTodaySide(confirmed, waitlist, open);
   renderFillList();
   renderDirectory();

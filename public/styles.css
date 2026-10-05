@@ -170,18 +170,63 @@ h1, h2, h3, p { margin: 0; }
 .metric small { font-size: 10px; color: var(--muted); margin-top: 2px; }
 .admin-grid { display: grid; grid-template-columns: minmax(0, 1.48fr) minmax(300px, .88fr); align-items: start; gap: 17px; }
 .requests-desk, .players-desk { margin-top: 0; }
-.players-desk { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.players-desk { grid-template-columns: minmax(0, 1.15fr) minmax(0, .95fr); }
 .today-side-panel, .players-desk .fill-panel { position: sticky; top: 12px; }
 .today-side-panel .button-wide { margin-top: 16px; }
 .today-players-list, .roster-scroll-list { max-height: min(58vh, 560px); overflow: auto; }
 .fill-panel { margin-top: 0; }
-.fill-list { max-height: min(52vh, 480px); }
+.fill-list { max-height: min(62vh, 620px); margin-top: 12px; }
 .players-desk .roster-scroll-list,
-.players-desk .fill-list,
 .players-desk #waitlistList {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
+.players-desk .fill-list {
+  grid-template-columns: 1fr;
+}
 .players-desk .panel-empty { grid-column: 1 / -1; }
+.waitlist-block { margin-top: 4px; }
+.fill-row {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface-tint);
+}
+.fill-row-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  min-width: 0;
+}
+.fill-row .person-info { flex: 1; min-width: 0; }
+.fill-row strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.fill-row small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: capitalize;
+}
+.fill-row .player-record { text-transform: none; }
+.fill-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.fill-row-actions .button {
+  flex: 1 1 auto;
+  min-height: 38px;
+  padding: 8px 12px;
+  font-size: 12px;
+  box-shadow: none;
+}
 .admin-main-column, .admin-side-column { display: grid; gap: 17px; }
 .panel { background: white; border: 1px solid var(--line); border-radius: 16px; padding: 22px; box-shadow: 0 5px 18px rgb(16 42 72 / 3%); }
 .directory-panel .directory-list { max-height: none; }
@@ -301,7 +346,6 @@ h1, h2, h3, p { margin: 0; }
   .today-side-panel, .players-desk .fill-panel { position: static; }
   .today-players-list, .roster-scroll-list, .fill-list { max-height: min(40vh, 320px); overflow: auto; }
   .players-desk .roster-scroll-list,
-  .players-desk .fill-list,
   .players-desk #waitlistList {
     grid-template-columns: 1fr;
   }
