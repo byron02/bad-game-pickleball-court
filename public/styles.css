@@ -170,11 +170,18 @@ h1, h2, h3, p { margin: 0; }
 .metric small { font-size: 10px; color: var(--muted); margin-top: 2px; }
 .admin-grid { display: grid; grid-template-columns: minmax(0, 1.48fr) minmax(300px, .88fr); align-items: start; gap: 17px; }
 .requests-desk, .players-desk { margin-top: 0; }
+.players-desk { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .today-side-panel, .players-desk .fill-panel { position: sticky; top: 12px; }
 .today-side-panel .button-wide { margin-top: 16px; }
 .today-players-list, .roster-scroll-list { max-height: min(58vh, 560px); overflow: auto; }
 .fill-panel { margin-top: 0; }
 .fill-list { max-height: min(52vh, 480px); }
+.players-desk .roster-scroll-list,
+.players-desk .fill-list,
+.players-desk #waitlistList {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.players-desk .panel-empty { grid-column: 1 / -1; }
 .admin-main-column, .admin-side-column { display: grid; gap: 17px; }
 .panel { background: white; border: 1px solid var(--line); border-radius: 16px; padding: 22px; box-shadow: 0 5px 18px rgb(16 42 72 / 3%); }
 .directory-panel .directory-list { max-height: none; }
@@ -290,8 +297,14 @@ h1, h2, h3, p { margin: 0; }
   .hero-progress { flex: auto; }
   .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .admin-grid { grid-template-columns: 1fr; }
+  .players-desk { grid-template-columns: 1fr; }
   .today-side-panel, .players-desk .fill-panel { position: static; }
   .today-players-list, .roster-scroll-list, .fill-list { max-height: min(40vh, 320px); overflow: auto; }
+  .players-desk .roster-scroll-list,
+  .players-desk .fill-list,
+  .players-desk #waitlistList {
+    grid-template-columns: 1fr;
+  }
   .admin-side-column { order: -1; }
   .court-grid { grid-template-columns: 1fr; }
   .admin-main { padding-bottom: 92px; }
