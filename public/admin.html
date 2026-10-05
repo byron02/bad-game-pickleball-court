@@ -170,13 +170,15 @@
               <div>
                 <span class="eyebrow">Reserved today</span>
                 <h2>Confirmed players</h2>
-                <p>Check in arrivals, or lock doubles partners so the draw keeps them together.</p>
+                <p>Check in arrivals, or lock doubles partners so the draw keeps them together. Earlier signup times are higher priority.</p>
               </div>
               <div class="view-toggle" role="group" aria-label="Confirmed players layout">
                 <button id="confirmedViewGrid" class="button button-small button-outline" type="button" aria-pressed="true">Grid</button>
                 <button id="confirmedViewList" class="button button-small button-outline" type="button" aria-pressed="false">List</button>
               </div>
             </div>
+            <label class="field-label" for="confirmedSearch">Search confirmed players</label>
+            <div class="search-field"><span aria-hidden="true">⌕</span><input id="confirmedSearch" type="search" placeholder="Name or skill level" autocomplete="off"></div>
             <div id="confirmedList" class="entry-list roster-full-list" data-layout="grid" aria-live="polite"></div>
             <div id="waitlistBlock" class="waitlist-block" hidden>
               <div class="list-subhead"><h3>Waitlist</h3><span id="waitlistCountLabel" class="count-pill">0</span></div>

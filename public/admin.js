@@ -24,6 +24,7 @@ const ui = {
   fillPager: $('fillPager'), waitlistPager: $('waitlistPager'),
   directoryPager: $('directoryPager'),
   confirmedViewGrid: $('confirmedViewGrid'), confirmedViewList: $('confirmedViewList'),
+  confirmedSearch: $('confirmedSearch'),
   directorySearch: $('directorySearch'), directoryList: $('directoryList'), shareLink: $('shareLinkText'),
   copyLink: $('copyLinkButton'), copyLinkSecondary: $('copyLinkSecondary'), refresh: $('refreshButton'),
   reset: $('resetButton'), resetDialog: $('resetDialog'), resetForm: $('resetForm'), resetConfirm: $('resetConfirm'), cancelReset: $('cancelReset'),
@@ -184,6 +185,31 @@ function formatDate(value) {
     timeZone: 'UTC', weekday: 'long', month: 'long', day: 'numeric',
   }).format(new Date(`${value}T12:00:00Z`));
   return label === 'Today' || label === 'Tomorrow' ? `${label} · ${pretty}` : pretty;
+}
+
+function formatSignupAt(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const sameDay = date.toDateString() === new Date().toDateString();
+  const time = new Intl.DateTimeFormat(undefined, {
+    hour: 'numeric', minute: '2-digit',
+  }).format(date);
+  if (sameDay) return `Signed up ${time}`;
+  return `Signed up ${new Intl.DateTimeFormat(undefined, {
+    month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+  }).format(date)}`;
+}
+
+function byPlayerName(a, b) {
+  return String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' })
+    || String(a.createdAt || '').localeCompare(String(b.createdAt || ''));
+}
+
+function matchesPlayerSearch(person, search) {
+  if (!search) return true;
+  const text = `${person.name || ''} ${person.skillLevel || ''} ${person.division || ''}`.toLowerCase();
+  return text.includes(search);
 }
 
 function initials(name) {
@@ -363,11 +389,15 @@ function renderEntry(entry, kind) {
     body.append(skillSelect(entry.id, entry.skillLevel));
     const details = [];
     if (entry.division && entry.division !== 'unspecified') details.push(entry.division);
+    const signedUp = formatSignupAt(entry.createdAt);
+    if (signedUp) details.push(signedUp);
     details.push('Fix name or skill if needed, then approve');
     body.append(node('div', 'entry-meta', details.join(' · ')));
   } else {
     const details = [entry.skillLevel || 'Skill not set'];
     if (entry.division && entry.division !== 'unspecified') details.push(entry.division);
+    const signedUp = formatSignupAt(entry.createdAt);
+    if (signedUp) details.push(signedUp);
     if (kind === 'confirmed' && entry.partnerPlayerId) details.push(`Locked doubles with ${partnerName(entry)}`);
     body.append(node('div', 'entry-meta', details.join(' · ')));
   }
@@ -481,11 +511,12 @@ function renderFillList() {
   const search = ui.rosterSearch?.value.trim().toLowerCase() || '';
   const openSpots = Math.max(0, Number(session?.spotsLeft ?? 0));
   const activePlayerIds = rosteredPlayerIds();
-  const available = players.filter((player) => {
-    if (!player.active || activePlayerIds.has(player.id)) return false;
-    const text = `${player.name || ''} ${player.skillLevel || ''} ${player.division || ''}`.toLowerCase();
-    return text.includes(search);
-  });
+  const available = players
+    .filter((player) => {
+      if (!player.active || activePlayerIds.has(player.id)) return false;
+      return matchesPlayerSearch(player, search);
+    })
+    .sort(byPlayerName);
   if (ui.fillSpotsNote) {
     ui.fillSpotsNote.textContent = openSpots > 0
       ? `${openSpots} open confirmed ${openSpots === 1 ? 'spot' : 'spots'}. Search someone who is not reserved yet, then add them or add and check in.`
@@ -567,9 +598,15 @@ function renderDashboard(data) {
 
   const pending = entries
     .filter((entry) => entry.status === 'pending')
-    .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')) || String(a.name || '').localeCompare(String(b.name || '')));
-  const confirmed = entries.filter((entry) => entry.status === 'confirmed');
-  const waitlist = entries.filter((entry) => ['waitlist', 'waitlisted'].includes(entry.status));
+    .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')) || byPlayerName(a, b));
+  const confirmedSearch = ui.confirmedSearch?.value.trim().toLowerCase() || '';
+  const confirmedAll = entries
+    .filter((entry) => entry.status === 'confirmed')
+    .sort(byPlayerName);
+  const confirmed = confirmedAll.filter((entry) => matchesPlayerSearch(entry, confirmedSearch));
+  const waitlist = entries
+    .filter((entry) => ['waitlist', 'waitlisted'].includes(entry.status))
+    .sort(byPlayerName);
   const pendingIds = new Set(pending.map((entry) => entry.id));
   for (const entryId of [...pendingSkillByEntry.keys()]) {
     if (!pendingIds.has(entryId)) pendingSkillByEntry.delete(entryId);
@@ -577,8 +614,8 @@ function renderDashboard(data) {
   for (const entryId of [...pendingNameByEntry.keys()]) {
     if (!pendingIds.has(entryId)) pendingNameByEntry.delete(entryId);
   }
-  const confirmedCount = Number(session.confirmedCount ?? confirmed.length);
-  const checkedInCount = Number(session.checkedInCount ?? confirmed.filter((entry) => entry.checkedIn).length);
+  const confirmedCount = Number(session.confirmedCount ?? confirmedAll.length);
+  const checkedInCount = Number(session.checkedInCount ?? confirmedAll.filter((entry) => entry.checkedIn).length);
   // Badge/list counts must match the entries currently shown — never a stale session field.
   const pendingCount = pending.length;
   const waitlistCount = waitlist.length;
@@ -598,14 +635,21 @@ function renderDashboard(data) {
   if (ui.waitlistBlock) ui.waitlistBlock.hidden = waitlist.length === 0;
   syncPendingBadges(pendingCount);
   renderList(ui.pendingList, pending, 'pending', 'No signup requests to review.');
-  renderList(ui.confirmedList, confirmed, 'confirmed', 'No reserved players yet. Share the signup link or add a known player.');
+  renderList(
+    ui.confirmedList,
+    confirmed,
+    'confirmed',
+    confirmedSearch
+      ? 'No confirmed players match that search.'
+      : 'No reserved players yet. Share the signup link or add a known player.',
+  );
   applyConfirmedLayout();
   if (ui.waitlistList) {
     renderList(ui.waitlistList, waitlist, 'waitlist', 'No players on the waitlist.', {
       pageKey: 'waitlist', pager: ui.waitlistPager,
     });
   }
-  renderTodaySide(confirmed, waitlist, open);
+  renderTodaySide(confirmedAll, waitlist, open);
   renderFillList();
   renderDirectory();
 
@@ -805,6 +849,10 @@ ui.directoryList.addEventListener('click', async (event) => {
 ui.rosterSearch?.addEventListener('input', () => {
   listPages.fill = 1;
   renderFillList();
+});
+ui.confirmedSearch?.addEventListener('input', () => {
+  if (!session) return;
+  renderDashboard({ session, entries, players });
 });
 ui.rosterFillList?.addEventListener('click', async (event) => {
   const button = event.target.closest('button[data-action]');

@@ -390,6 +390,7 @@ input[type="datetime-local"].input {
 .settings-panel .button-wide { margin-top: 16px; }
 .settings-panel form,
 .settings-panel .input { max-width: 100%; min-width: 0; }
+.players-desk .search-field { margin: 0 0 14px; }
 .share-box { display: grid; gap: 8px; margin-top: 25px; border-top: 1px solid var(--line); padding-top: 18px; }
 .share-box code { display: block; overflow-wrap: anywhere; color: var(--blue); background: var(--blue-pale); border-radius: 8px; padding: 9px 10px; font-size: 11px; }
 .share-box .button { justify-self: start; }
