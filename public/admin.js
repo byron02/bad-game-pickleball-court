@@ -2,7 +2,7 @@ import {
   getAdminDashboard, watchAdminDashboard, signInOrganizerWithGoogle,
   signOutOrganizer, approveEntry, rejectEntry, removeEntry, checkInEntry, checkOutEntry,
   reservePlayer, updatePlayer, updateSession, resetSession, setEntryPartner,
-  createAndReservePlayer,
+  createAndReservePlayer, getCurrentUser,
 } from '../src/firebaseStore.js';
 import { initCourtsUI } from './courts-ui.js';
 
@@ -43,7 +43,24 @@ const SKILL_LEVELS = ['beginner', 'intermediate', 'advanced'];
 const VIEWS = ['overview', 'requests', 'roster', 'directory', 'courts'];
 const PAGE_SIZE = 12;
 const listPages = { waitlist: 1, fill: 1, directory: 1 };
-let confirmedLayout = localStorage.getItem('confirmedLayout') === 'list' ? 'list' : 'grid';
+
+function readConfirmedLayout() {
+  try {
+    return localStorage.getItem('confirmedLayout') === 'list' ? 'list' : 'grid';
+  } catch {
+    return 'grid';
+  }
+}
+
+function writeConfirmedLayout(layout) {
+  try {
+    localStorage.setItem('confirmedLayout', layout);
+  } catch {
+    // Private browsing can block storage; keep the in-memory choice only.
+  }
+}
+
+let confirmedLayout = readConfirmedLayout();
 
 function applyConfirmedLayout() {
   if (!ui.confirmedList) return;
@@ -54,7 +71,7 @@ function applyConfirmedLayout() {
 
 function setConfirmedLayout(layout) {
   confirmedLayout = layout === 'list' ? 'list' : 'grid';
-  localStorage.setItem('confirmedLayout', confirmedLayout);
+  writeConfirmedLayout(confirmedLayout);
   applyConfirmedLayout();
 }
 
@@ -72,13 +89,28 @@ function clearAlert() {
 function friendlyError(error) {
   const code = error?.code || '';
   if (code === 'organizer-not-approved') return error.message;
+  if (code === 'timeout') return error.message || 'Connection timed out. Reload and try again.';
   if (code.includes('permission-denied')) return 'The database denied this action. Refresh the page and try again.';
   if (code.includes('failed-precondition') || code.includes('aborted')) {
     return 'Someone else updated the session at the same time. Tap Refresh, then try again.';
   }
   if (code.includes('wrong-password') || code.includes('invalid-credential')) return 'Email or password was not accepted.';
-  if (code.includes('network')) return 'Network error. Check your connection and try again.';
+  if (code.includes('network') || code.includes('unavailable')) return 'Network error. Check your connection and try again.';
   return error?.message || 'Something went wrong. Please try again.';
+}
+
+function withTimeout(promise, ms, message) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const err = new Error(message);
+      err.code = 'timeout';
+      reject(err);
+    }, ms);
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
 }
 
 function manilaToday() {
@@ -547,9 +579,16 @@ async function beginDashboard(date) {
   const hashView = location.hash.replace(/^#/, '');
   const pendingCount = snapshot.entries.filter((entry) => entry.status === 'pending').length;
   showView(VIEWS.includes(hashView) ? hashView : (pendingCount > 0 ? 'requests' : 'overview'));
-  await courtUI.refresh(session.id);
+  // Show the desk immediately; courts can finish loading afterward.
+  courtUI.refresh(session.id).catch((error) => showAlert(friendlyError(error)));
   unsubscribeDashboard?.();
-  unsubscribeDashboard = await watchAdminDashboard((next) => renderDashboard(next), date);
+  unsubscribeDashboard = await watchAdminDashboard((next) => {
+    if (next?.error) {
+      showAlert(friendlyError(next.error));
+      return;
+    }
+    renderDashboard(next);
+  }, date);
   clearAlert();
 }
 
@@ -953,12 +992,26 @@ const slowLoading = setTimeout(() => {
     ui.loadingMessage.textContent = 'Still connecting to Firebase. Reload this page if it does not finish.';
     ui.reloadPage.hidden = false;
   }
-}, 12000);
+}, 8000);
 try {
-  await beginDashboard();
+  const user = await withTimeout(
+    getCurrentUser(),
+    15000,
+    'Sign-in check timed out. Reload this page or sign in again.',
+  );
+  if (!user || user.isAnonymous) {
+    showAuth();
+  } else {
+    await withTimeout(
+      beginDashboard(),
+      20000,
+      'Dashboard load timed out. Check your connection, then reload.',
+    );
+  }
 } catch (error) {
   showAuth();
   if (!String(error?.code || '').includes('auth-required')) showAlert(friendlyError(error));
 } finally {
   clearTimeout(slowLoading);
+  if (!ui.loading.hidden) ui.loading.hidden = true;
 }

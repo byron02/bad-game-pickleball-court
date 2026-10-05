@@ -196,10 +196,23 @@ function summarize(session, entries) {
   return { ...session, pendingCount, checkedInCount };
 }
 
-function authReady() {
+function authReady(timeoutMs = 15000) {
   initializeClient();
-  return new Promise((resolve) => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => { unsubscribe(); resolve(user); });
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      unsubscribe();
+      reject(error('Firebase Auth did not respond. Reload the page or check your connection.', 'timeout'));
+    }, timeoutMs);
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      unsubscribe();
+      resolve(user);
+    });
   });
 }
 
@@ -228,9 +241,21 @@ async function ensureOrganizer() {
   const user = await authReady();
   if (!user) throw error('Organizer sign-in is required.', 'auth-required');
   if (user.isAnonymous) throw error('Organizer sign-in is required.', 'auth-required');
-  // An organizer may be approved after their first sign-in. Always check the
-  // server so a previously cached missing document cannot keep denying them.
-  const permit = await getDocFromServer(doc(db, 'organizers', user.uid));
+  // An organizer may be approved after their first sign-in. Prefer the server so a
+  // previously cached missing document cannot keep denying them, but fall back to
+  // cache if the server read stalls (common on flaky mobile networks).
+  const organizerDoc = doc(db, 'organizers', user.uid);
+  let permit;
+  try {
+    permit = await Promise.race([
+      getDocFromServer(organizerDoc),
+      new Promise((_, reject) => {
+        setTimeout(() => reject(error('Organizer check timed out.', 'timeout')), 10000);
+      }),
+    ]);
+  } catch {
+    permit = await getDoc(organizerDoc);
+  }
   if (!permit.exists() || permit.data().active !== true) {
     throw error(`The account ${user.email || 'you selected'} is not approved as an organizer.`, 'organizer-not-approved');
   }
