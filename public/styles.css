@@ -100,6 +100,17 @@ h1, h2, h3, p { margin: 0; }
 .how-it-works li { display: flex; align-items: baseline; gap: 14px; margin: 12px 0; }
 .how-it-works li span { color: #3185d7; font-size: 11px; font-weight: 850; letter-spacing: .06em; }
 .how-it-works li p { font-size: 12px; color: var(--muted); }
+.top-players { margin-top: 40px; max-width: 505px; }
+.top-players h2 { margin-top: 8px; font-size: 18px; letter-spacing: -.03em; }
+.top-players-copy { margin-top: 6px; color: var(--muted); font-size: 12px; }
+.top-players-list { list-style: none; padding: 0; margin: 16px 0 0; display: grid; gap: 10px; }
+.top-players-empty { padding: 14px 0; color: var(--muted); font-size: 12px; border-top: 1px solid var(--line); }
+.top-player { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 10px 0; border-top: 1px solid var(--line); }
+.top-player-rank { flex: 0 0 auto; color: #3185d7; font-size: 11px; font-weight: 850; letter-spacing: .06em; }
+.top-player .avatar { width: 36px; height: 36px; font-size: 11px; }
+.top-player-info { flex: 1; min-width: 0; }
+.top-player-info strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.top-player-info small { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; text-transform: capitalize; }
 .signup-card { background: var(--surface); border-radius: 20px; border: 1px solid var(--line); padding: clamp(25px, 3.4vw, 39px); box-shadow: var(--shadow); }
 .card-heading h2 { font-size: 26px; margin-top: 6px; letter-spacing: -.04em; line-height: 1.2; }
 .card-heading p { margin-top: 7px; color: var(--muted); font-size: 13px; }
@@ -165,7 +176,10 @@ h1, h2, h3, p { margin: 0; }
 .entry-body { flex: 1; min-width: 0; }
 .entry-top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .entry-body strong { font-size: 13px; }
-.entry-meta { margin-top: 2px; color: var(--muted); font-size: 11px; }
+.entry-meta { margin-top: 2px; color: var(--muted); font-size: 11px; text-transform: capitalize; }
+.entry-skill { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; max-width: 220px; }
+.entry-skill > span { color: var(--muted); font-size: 11px; font-weight: 750; }
+.entry-skill-select { min-height: 36px; padding: 6px 10px; font-size: 12px; }
 .entry-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
 .entry-actions .button { box-shadow: none; }
 .list-subhead { display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--line); padding-top: 20px; margin: 20px 0 12px; }
@@ -249,6 +263,7 @@ h1, h2, h3, p { margin: 0; }
   .intro-copy { margin-top: 13px; font-size: 14px; }
   .session-card { max-width: none; margin-top: 25px; }
   .how-it-works { display: none; }
+  .top-players { max-width: none; margin-top: 28px; }
   .signup-card { width: 100%; }
   .site-footer { padding-top: 6px; }
   .dashboard-head { flex-direction: column; align-items: stretch; margin: 22px 0 16px; }
