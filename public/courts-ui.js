@@ -76,11 +76,13 @@ export function initCourtsUI({ getSession, getEntries, showAlert, refreshRoster 
     return banner;
   }
 
-  function nextGameBlock(preview) {
+  function nextGameBlock(preview, { whilePlaying = false } = {}) {
     const box = el('div', 'court-next');
-    box.append(el('span', 'label-overline', 'Next game'));
+    box.append(el('span', 'label-overline', whilePlaying ? 'Up next' : 'Next game'));
     if (preview?.lineup) {
-      box.append(el('p', 'court-next-copy', 'Prioritizes players with fewer games so far.'));
+      box.append(el('p', 'court-next-copy', whilePlaying
+        ? 'Waiting players queued for when this match ends. Prioritizes fewer games.'
+        : 'Prioritizes players with fewer games so far.'));
       box.append(matchContent(preview.lineup, null, preview.players || []));
     } else {
       const needed = Number(preview?.pool?.needed || 4);
@@ -116,15 +118,21 @@ export function initCourtsUI({ getSession, getEntries, showAlert, refreshRoster 
       card.append(settings);
 
       const actions = el('div', 'court-actions');
+      card.append(poolBanner(preview?.pool));
       if (active) {
-        card.append(poolBanner(preview?.pool));
         card.append(matchContent(active.lineup, active));
+        card.append(nextGameBlock(preview, { whilePlaying: true }));
         actions.append(button('Side A wins', 'win-a', active.id, 'button-primary'));
         actions.append(button('Side B wins', 'win-b', active.id, 'button-primary'));
         actions.append(button('Replace player', 'replace', active.id));
+        if (preview?.lineup) {
+          actions.append(button('Shuffle next', 'draw', court.id));
+          actions.append(button('Clear next', 'clear-draw', court.id, 'button-quiet'));
+        } else {
+          actions.append(button('Draw next game', 'draw', court.id));
+        }
         actions.append(button('Cancel game', 'cancel-game', active.id, 'button-quiet'));
       } else {
-        card.append(poolBanner(preview?.pool));
         card.append(nextGameBlock(preview));
         if (preview?.lineup) {
           actions.append(button('Start this court', 'start', court.id, 'button-primary'));
@@ -161,8 +169,9 @@ export function initCourtsUI({ getSession, getEntries, showAlert, refreshRoster 
   }
 
   async function refreshPreviews() {
-    const idle = courts.filter((court) => !games.some((game) => game.courtId === court.id && game.status === 'active'));
-    await Promise.all(idle.map(async (court) => {
+    // Propose for every court, including ones currently playing, so organizers
+    // can see who is up next while the live match is still on.
+    await Promise.all(courts.map(async (court) => {
       try {
         const preview = await proposeCourtLineup({
           sessionId,
@@ -188,17 +197,7 @@ export function initCourtsUI({ getSession, getEntries, showAlert, refreshRoster 
     ]);
     courts = courtResult.courts;
     games = gameResult.games;
-    for (const court of courts) {
-      if (court.activeGameId) previews.delete(court.id);
-    }
     await refreshPreviews();
-    // Also attach shared pool stats onto active courts for the banner.
-    const sample = [...previews.values()][0];
-    if (sample?.pool) {
-      for (const court of courts) {
-        if (!previews.has(court.id)) previews.set(court.id, { pool: sample.pool });
-      }
-    }
     render();
   }
 
@@ -322,7 +321,6 @@ export function initCourtsUI({ getSession, getEntries, showAlert, refreshRoster 
         const preview = previews.get(id);
         if (!preview?.lineup) throw new Error('Draw players first.');
         await startCourtGame({ sessionId, courtId: id, lineup: preview.lineup });
-        previews.delete(id);
         showAlert(`${court?.name || 'Court'} started.`, 'success');
       } else if (action === 'win-a' || action === 'win-b') {
         const winnerSide = action === 'win-a' ? 'A' : 'B';
