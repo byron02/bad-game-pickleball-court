@@ -71,14 +71,21 @@
         </div>
         <p id="selectedNote" class="field-help"></p>
 
-        <div id="selectedActions" class="play-actions" hidden>
-          <button id="checkInButton" class="button button-primary button-wide" type="button">Check in</button>
-          <button id="sitOutButton" class="button button-outline button-wide" type="button">Sit out</button>
-          <button id="resumeButton" class="button button-primary button-wide" type="button" hidden>Resume play</button>
-          <button id="leaveButton" class="button button-danger-outline button-wide" type="button">Leave for today</button>
+        <div id="deskTabs" class="play-tabs" hidden>
+          <button id="statusTabButton" class="play-tab active" type="button" data-view="status">Status</button>
+          <button id="pairTabButton" class="play-tab" type="button" data-view="pair">Partner</button>
         </div>
 
-        <div id="pairPanel" class="play-pair" hidden>
+        <div id="statusView" class="play-view">
+          <div id="selectedActions" class="play-actions" hidden>
+            <button id="checkInButton" class="button button-primary button-wide" type="button">Check in</button>
+            <button id="sitOutButton" class="button button-outline button-wide" type="button">Sit out</button>
+            <button id="resumeButton" class="button button-primary button-wide" type="button" hidden>Resume play</button>
+            <button id="leaveButton" class="button button-danger-outline button-wide" type="button">Leave for today</button>
+          </div>
+        </div>
+
+        <div id="pairPanel" class="play-view play-pair" hidden>
           <span class="label-overline">Doubles partner</span>
           <p id="pairStatus" class="field-help">You play as a solo until both of you lock the pair.</p>
           <label class="field-label" for="pairSearch">Request a partner</label>

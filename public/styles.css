@@ -449,12 +449,37 @@ input[type="datetime-local"].input {
   grid-template-columns: 1fr 1fr;
   margin-top: 0;
 }
-.play-pair {
-  margin-top: 18px;
-  padding-top: 16px;
-  border-top: 1px solid var(--line);
+.play-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-top: 14px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
 }
-.play-pair-results { max-height: 220px; margin-top: 8px; }
+.play-tab {
+  border: 0;
+  background: transparent;
+  border-radius: 9px;
+  padding: 10px 12px;
+  font: inherit;
+  font-weight: 700;
+  color: var(--muted);
+  cursor: pointer;
+}
+.play-tab.active {
+  background: var(--navy);
+  color: #fff;
+}
+.play-view { margin-top: 4px; }
+.play-pair {
+  margin-top: 12px;
+  padding-top: 0;
+  border-top: 0;
+}
+.play-pair-results { max-height: 280px; margin-top: 8px; }
 .play-pair-row {
   display: flex;
   align-items: center;

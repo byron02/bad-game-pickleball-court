@@ -26,6 +26,10 @@ const ui = {
   selectedName: $('selectedName'),
   selectedMeta: $('selectedMeta'),
   selectedNote: $('selectedNote'),
+  deskTabs: $('deskTabs'),
+  statusTab: $('statusTabButton'),
+  pairTab: $('pairTabButton'),
+  statusView: $('statusView'),
   pinDialog: $('pinDialog'),
   pinForm: $('pinForm'),
   pinAvatar: $('pinAvatar'),
@@ -58,6 +62,7 @@ let board = null;
 let stopRoster = null;
 let stopBoard = null;
 let alertTimer = null;
+let deskView = 'status';
 
 function showAlert(message) {
   ui.alert.textContent = message;
@@ -264,12 +269,26 @@ function closePinModal() {
   clearPinAlert();
 }
 
-function selectEntry(entryId, { openPin = true } = {}) {
+function setDeskView(view) {
+  deskView = view === 'pair' ? 'pair' : 'status';
+  ui.statusTab?.classList.toggle('active', deskView === 'status');
+  ui.pairTab?.classList.toggle('active', deskView === 'pair');
+  if (ui.statusView) ui.statusView.hidden = deskView !== 'status';
+  if (ui.pairPanel) ui.pairPanel.hidden = deskView !== 'pair';
+  if (ui.selectedNote) {
+    ui.selectedNote.textContent = deskView === 'pair'
+      ? 'Request or manage your doubles partner here. They must approve before the draw locks you together.'
+      : 'This name is unlocked on this phone. Check in, sit out, or leave from here.';
+  }
+}
+
+function selectEntry(entryId, { openPin = true, resetView = openPin } = {}) {
   selectedId = entryId;
   const entry = roster.find((item) => item.id === entryId);
   renderResults();
   if (!entry) {
     ui.selected.hidden = true;
+    if (ui.deskTabs) ui.deskTabs.hidden = true;
     closePinModal();
     return;
   }
@@ -278,6 +297,8 @@ function selectEntry(entryId, { openPin = true } = {}) {
   if (!unlocked) {
     ui.selected.hidden = true;
     ui.selectedActions.hidden = true;
+    if (ui.deskTabs) ui.deskTabs.hidden = true;
+    if (ui.statusView) ui.statusView.hidden = false;
     ui.pairPanel.hidden = true;
     if (openPin) openPinModal(entry);
     return;
@@ -288,13 +309,15 @@ function selectEntry(entryId, { openPin = true } = {}) {
   ui.selectedAvatar.textContent = initials(entry.name);
   ui.selectedName.textContent = entry.name || 'Player';
   ui.selectedMeta.textContent = statusLabel(entry);
-  ui.selectedNote.textContent = 'This name is unlocked on this phone. Sit out, check in, leave, or pair from here.';
   ui.selectedActions.hidden = false;
   ui.checkIn.hidden = entry.checkedIn && !entry.sittingOut;
   ui.sitOut.hidden = !entry.checkedIn || entry.sittingOut;
   ui.resume.hidden = !entry.sittingOut;
   ui.leave.hidden = false;
   ui.checkIn.textContent = entry.sittingOut ? 'Check in & resume' : 'Check in';
+  if (ui.deskTabs) ui.deskTabs.hidden = false;
+  if (resetView) deskView = 'status';
+  setDeskView(deskView);
   renderPairPanel(entry);
 }
 
@@ -327,17 +350,14 @@ async function submitPin(event) {
 function renderPairPanel(entry) {
   ui.pairActions.replaceChildren();
   ui.pairCandidates.replaceChildren();
-  if (!entry || !controlsEntry(entry)) {
-    ui.pairPanel.hidden = true;
-    return;
-  }
+  if (!entry || !controlsEntry(entry)) return;
+
   if (!entry.playerId) {
-    ui.pairPanel.hidden = false;
     ui.pairStatus.textContent = 'Pairing unlocks after the organizer confirms your player profile.';
     ui.pairSearch.hidden = true;
     return;
   }
-  ui.pairPanel.hidden = false;
+
   ui.pairSearch.hidden = false;
 
   if (entry.partnerPlayerId) {
@@ -418,6 +438,7 @@ async function runAction(action, button) {
       await playerLeaveToday(session.id, entry.id);
       selectedId = null;
       ui.selected.hidden = true;
+      if (ui.deskTabs) ui.deskTabs.hidden = true;
       showAlert('You left today’s session.');
     }
   } catch (error) {
@@ -465,6 +486,12 @@ ui.search.addEventListener('input', renderResults);
 ui.pairSearch.addEventListener('input', () => {
   const mine = myEntry();
   if (mine && selectedId === mine.id) renderPairPanel(mine);
+});
+ui.statusTab?.addEventListener('click', () => setDeskView('status'));
+ui.pairTab?.addEventListener('click', () => {
+  setDeskView('pair');
+  const entry = roster.find((item) => item.id === selectedId) || myEntry();
+  if (entry) renderPairPanel(entry);
 });
 ui.pinForm?.addEventListener('submit', submitPin);
 ui.pinCancel?.addEventListener('click', () => {
