@@ -1,0 +1,25 @@
+{
+  "name": "bad-game-pickleball-courts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "npm run build && firebase emulators:start --only hosting,auth,firestore",
+    "test": "node --test",
+    "deploy": "npm run build && firebase deploy --only hosting,firestore",
+    "bootstrap:organizer": "node scripts/bootstrap-organizer.mjs"
+  },
+  "dependencies": {
+    "firebase": "^12.19.0"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2",
+    "esbuild": "^0.25.0",
+    "firebase-admin": "^13.0.0",
+    "firebase-tools": "^15.32.1"
+  },
+  "overrides": {
+    "@grpc/grpc-js": "^1.14.5"
+  }
+}

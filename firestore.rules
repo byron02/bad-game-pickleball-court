@@ -1,0 +1,152 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function anonymousPlayer() {
+      return signedIn() &&
+        request.auth.token.firebase.sign_in_provider == 'anonymous';
+    }
+
+    function organizer() {
+      return signedIn() &&
+        request.auth.token.firebase.sign_in_provider != 'anonymous' &&
+        exists(/databases/$(database)/documents/organizers/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/organizers/$(request.auth.uid)).data.active == true;
+    }
+
+    function validName(name) {
+      return name is string && name.size() >= 2 && name.size() <= 60;
+    }
+
+    function validSkill(skill) {
+      return skill in ['beginner', 'intermediate', 'advanced'];
+    }
+
+    function validDivision(division) {
+      return division in ['woman', 'man', 'unspecified'];
+    }
+
+    // Compressed JPEG data URLs are used on Spark, where Cloud Storage for
+    // Firebase is unavailable without upgrading the project to Blaze.
+    function validPhoto(photo) {
+      return photo == null ||
+        (photo is string && photo.size() <= 120000 &&
+          photo.matches('^data:image/jpeg;base64,[A-Za-z0-9+/=]+$'));
+    }
+
+    function validSession(data) {
+      return data.capacity is int && data.capacity >= 1 && data.capacity <= 512 &&
+        data.confirmedCount is int && data.confirmedCount >= 0 &&
+        data.confirmedCount <= data.capacity &&
+        data.checkedInCount is int && data.checkedInCount >= 0 &&
+        data.checkedInCount <= data.confirmedCount &&
+        (!data.keys().hasAny(['activeGameCount']) ||
+          (data.activeGameCount is int && data.activeGameCount >= 0)) &&
+        data.waitlistCount is int && data.waitlistCount >= 0 &&
+        data.open is bool;
+    }
+
+    function validPublicRequest(sessionId, entryId) {
+      let data = request.resource.data;
+      let session = get(/databases/$(database)/documents/sessions/$(sessionId));
+      return anonymousPlayer() && entryId == request.auth.uid &&
+        session.data.open == true &&
+        data.keys().hasOnly([
+          'sessionId', 'ownerUid', 'playerId', 'name', 'skillLevel',
+          'division', 'photoData', 'status', 'checkedIn', 'source',
+          'createdAt', 'updatedAt', 'approvedAt', 'reviewedAt',
+          'checkedInAt', 'checkedOutAt'
+        ]) &&
+        data.keys().hasAll([
+          'sessionId', 'ownerUid', 'playerId', 'name', 'skillLevel',
+          'division', 'photoData', 'status', 'checkedIn', 'source',
+          'createdAt', 'updatedAt', 'approvedAt', 'reviewedAt',
+          'checkedInAt', 'checkedOutAt'
+        ]) &&
+        data.sessionId == sessionId &&
+        data.ownerUid == request.auth.uid &&
+        data.status == 'pending' &&
+        data.checkedIn == false &&
+        data.source == 'public' &&
+        data.createdAt == request.time && data.updatedAt == request.time &&
+        data.approvedAt == null && data.reviewedAt == null &&
+        data.checkedInAt == null && data.checkedOutAt == null &&
+        validName(data.name) && validSkill(data.skillLevel) &&
+        validDivision(data.division) && validPhoto(data.photoData) &&
+        (
+          data.playerId == null ||
+          (data.playerId is string &&
+            exists(/databases/$(database)/documents/players/$(data.playerId)) &&
+            get(/databases/$(database)/documents/players/$(data.playerId)).data.active == true &&
+            get(/databases/$(database)/documents/players/$(data.playerId)).data.name == data.name &&
+            get(/databases/$(database)/documents/players/$(data.playerId)).data.skillLevel == data.skillLevel &&
+            get(/databases/$(database)/documents/players/$(data.playerId)).data.division == data.division)
+        );
+    }
+
+    match /organizers/{uid} {
+      // Add the first organizer document from Firebase Console or Admin SDK.
+      // Clients cannot grant themselves organizer access.
+      allow get: if signedIn() && request.auth.uid == uid;
+      allow list, create, update, delete: if false;
+    }
+
+    match /daySessions/{date} {
+      allow read, write: if organizer();
+    }
+
+    match /players/{playerId} {
+      allow get: if organizer() || (anonymousPlayer() && resource.data.active == true);
+      allow list: if organizer() ||
+        (anonymousPlayer() && request.query.limit != null &&
+          request.query.limit <= 20 && resource.data.active == true);
+      allow create, update: if organizer() &&
+        validName(request.resource.data.name) &&
+        validSkill(request.resource.data.skillLevel) &&
+        validDivision(request.resource.data.division) &&
+        validPhoto(request.resource.data.photoData) &&
+        request.resource.data.active is bool &&
+        request.resource.data.wins is int && request.resource.data.wins >= 0 &&
+        request.resource.data.losses is int && request.resource.data.losses >= 0;
+      allow delete: if false;
+    }
+
+    match /sessions/{sessionId} {
+      // A random document ID is the share token. Public clients cannot list
+      // sessions or discover a token from the day index.
+      allow get: if organizer() || (anonymousPlayer() && resource.data.open == true);
+      allow list: if organizer();
+      allow create, update: if organizer() && validSession(request.resource.data);
+      allow delete: if false;
+
+      match /entries/{entryId} {
+        allow get: if organizer() ||
+          (anonymousPlayer() && entryId == request.auth.uid) ||
+          (signedIn() && resource.data.ownerUid == request.auth.uid);
+        allow list: if organizer();
+        allow create: if organizer() || validPublicRequest(sessionId, entryId);
+        allow update: if organizer();
+        allow delete: if false;
+      }
+
+      match /playerClaims/{playerId} {
+        allow read, write: if organizer();
+      }
+
+      match /playerLocks/{playerId} {
+        allow read, write: if organizer();
+      }
+
+      match /games/{gameId} {
+        allow read, write: if organizer();
+      }
+    }
+
+    match /courts/{courtId} {
+      allow read, write: if organizer();
+    }
+  }
+}

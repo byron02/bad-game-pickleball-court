@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#08468c">
+  <meta name="description" content="Sign up for open play at Bad Game Pickleball Courts.">
+  <title>Join open play · Bad Game Pickleball Courts</title>
+  <link rel="icon" href="/logo.jpg" type="image/jpeg">
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/signup.js"></script>
+</head>
+<body class="public-page">
+  <header class="site-header">
+    <div class="shell header-inner">
+      <a class="brand" href="/join" aria-label="Bad Game Pickleball Courts home">
+        <span class="brand-mark"><img src="/logo.jpg" alt=""></span>
+        <span><strong>Bad Game</strong><small>Pickleball Courts</small></span>
+      </a>
+      <span class="header-chip"><span class="live-dot"></span> Open play signups</span>
+    </div>
+  </header>
+
+  <main class="shell public-main">
+    <div id="pageAlert" class="alert" role="alert" hidden></div>
+    <div class="public-grid">
+      <section class="intro-panel" aria-labelledby="joinTitle">
+        <div class="eyebrow">Bad Game · Open play</div>
+        <h1 id="joinTitle">Your next game starts here.</h1>
+        <p class="intro-copy">Pick your name from our player list, or make a new player profile. The organizer will review your request for today's session.</p>
+
+        <div class="session-card" aria-live="polite">
+          <div class="session-card-top">
+            <div><span class="label-overline">Today's session</span><h2 id="sessionDate">Loading…</h2></div>
+            <span id="sessionState" class="badge badge-neutral">Loading</span>
+          </div>
+          <div class="capacity-line"><strong id="confirmedCount">—</strong><span> / <span id="capacityCount">—</span> confirmed spots</span></div>
+          <div class="capacity-track" aria-hidden="true"><span id="capacityFill"></span></div>
+          <div class="capacity-footer"><span id="capacityNote">Checking availability…</span><span id="waitlistCount"></span></div>
+        </div>
+
+        <div class="how-it-works">
+          <h2>How signups work</h2>
+          <ol>
+            <li><span>01</span><p>Send a request with your name and skill level.</p></li>
+            <li><span>02</span><p>The organizer confirms players and reviews new profiles.</p></li>
+            <li><span>03</span><p>Confirmed signups hold a spot. Check in when you arrive.</p></li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="signup-card" aria-labelledby="signupTitle">
+        <div class="card-heading"><span class="eyebrow">Player signup</span><h2 id="signupTitle">I want to play today</h2><p>Choose how you'd like to join the list.</p></div>
+
+        <div id="joinBody">
+          <div class="tabs" role="tablist" aria-label="Player type">
+            <button id="existingTab" class="tab active" type="button" role="tab" aria-selected="true" aria-controls="existingPanel">I've played here</button>
+            <button id="newTab" class="tab" type="button" role="tab" aria-selected="false" aria-controls="newPanel">I'm new</button>
+          </div>
+
+          <section id="existingPanel" class="tab-panel" role="tabpanel" aria-labelledby="existingTab">
+            <label class="field-label" for="playerSearch">Find your player profile</label>
+            <div class="search-field"><span aria-hidden="true">⌕</span><input id="playerSearch" type="search" autocomplete="off" placeholder="Type at least 2 letters" maxlength="60"></div>
+            <p class="field-help">Select your profile below. Every signup is reviewed by the organizer.</p>
+            <div id="searchResults" class="search-results" aria-live="polite"><p class="empty-note">Start typing your name to search.</p></div>
+            <div id="selectedPlayer" class="selected-player" hidden></div>
+            <label class="field-label" for="existingPhoto">Add or update your photo <span class="optional">optional</span></label>
+            <div class="photo-picker">
+              <div id="existingPhotoPreview" class="photo-preview" aria-hidden="true">+</div>
+              <div><input id="existingPhoto" type="file" accept="image/jpeg,image/png,image/webp"><p class="field-help">The organizer reviews photo changes with your request.</p></div>
+            </div>
+            <button id="existingSubmit" class="button button-primary button-wide" type="button" disabled>Request my spot <span aria-hidden="true">→</span></button>
+            <p class="submission-note">A request does not hold a spot until the organizer approves it.</p>
+          </section>
+
+          <section id="newPanel" class="tab-panel" role="tabpanel" aria-labelledby="newTab" hidden>
+            <form id="newPlayerForm" novalidate>
+              <label class="field-label" for="newName">Your full name</label>
+              <input id="newName" name="name" class="input" type="text" autocomplete="name" minlength="2" maxlength="60" required placeholder="e.g. Maria Santos">
+
+              <label class="field-label" for="newSkill">Skill level</label>
+              <select id="newSkill" name="skillLevel" class="input" required>
+                <option value="">Select your level</option>
+                <option value="beginner">Beginner</option>
+                <option value="intermediate">Intermediate</option>
+                <option value="advanced">Advanced</option>
+              </select>
+
+              <label class="field-label" for="newDivision">Division eligibility <span class="optional">optional</span></label>
+              <select id="newDivision" name="division" class="input">
+                <option value="unspecified">Prefer not to specify</option>
+                <option value="woman">Woman</option>
+                <option value="man">Man</option>
+              </select>
+              <p class="field-help">Helps with women’s, men’s, and mixed doubles assignments.</p>
+
+              <label class="field-label" for="newPhoto">Photo <span class="optional">optional</span></label>
+              <div class="photo-picker">
+                <div id="photoPreview" class="photo-preview" aria-hidden="true">+</div>
+                <div><input id="newPhoto" name="photo" type="file" accept="image/jpeg,image/png,image/webp"><p class="field-help">JPG, PNG, or WebP. Max 5 MB.</p></div>
+              </div>
+
+              <button class="button button-primary button-wide" type="submit">Send request <span aria-hidden="true">→</span></button>
+              <p class="submission-note">The organizer checks new profiles before approving a spot.</p>
+            </form>
+          </section>
+        </div>
+
+        <div id="successPanel" class="success-panel" role="status" hidden>
+          <div class="success-icon" aria-hidden="true">✓</div>
+          <h3 id="successTitle">Request sent!</h3>
+          <p>Your signup is awaiting organizer review. Once approved, you'll have a confirmed spot or a place on the waitlist.</p>
+          <p class="field-help">This page updates when the organizer reviews your request.</p>
+        </div>
+      </section>
+    </div>
+  </main>
+  <footer class="site-footer shell"><span>Bad Game Pickleball Courts</span><a href="/admin">Organizer dashboard</a></footer>
+</body>
+</html>
