@@ -65,8 +65,17 @@ h1, h2, h3, p { margin: 0; }
 
 .field-label { display: block; margin: 17px 0 7px; font-size: 12px; font-weight: 800; }
 .field-label:first-child { margin-top: 0; }
-.input, .search-field { width: 100%; min-height: 44px; border: 1px solid #cfdded; border-radius: 10px; background: var(--surface); color: var(--navy); font-size: 13px; }
+.input, .search-field { width: 100%; max-width: 100%; min-width: 0; min-height: 44px; border: 1px solid #cfdded; border-radius: 10px; background: var(--surface); color: var(--navy); font-size: 13px; }
 .input { display: block; padding: 10px 12px; }
+input[type="date"].input,
+input[type="time"].input,
+input[type="datetime-local"].input {
+  max-width: 100%;
+  min-width: 0;
+  width: 100%;
+  -webkit-appearance: none;
+  appearance: none;
+}
 .input::placeholder, .search-field input::placeholder { color: #8998a8; }
 .search-field { display: flex; align-items: center; gap: 8px; padding: 0 12px; }
 .search-field span { color: var(--blue); font-size: 23px; line-height: 1; transform: translateY(-1px); }
@@ -379,6 +388,9 @@ h1, h2, h3, p { margin: 0; }
 .panel-empty { padding: 20px 12px; border: 1px dashed #c8d7e5; border-radius: 10px; text-align: center; color: var(--muted); font-size: 12px; }
 .settings-panel .field-label { margin-top: 13px; }
 .settings-panel .button-wide { margin-top: 16px; }
+.settings-panel form,
+.settings-panel .input { max-width: 100%; min-width: 0; }
+.panel { min-width: 0; overflow-x: clip; }
 .share-box { display: grid; gap: 8px; margin-top: 25px; border-top: 1px solid var(--line); padding-top: 18px; }
 .share-box code { display: block; overflow-wrap: anywhere; color: var(--blue); background: var(--blue-pale); border-radius: 8px; padding: 9px 10px; font-size: 11px; }
 .share-box .button { justify-self: start; }
