@@ -26,10 +26,13 @@ export function initCourtsUI({ getSession, getEntries, showAlert, refreshRoster 
   const form = $('courtForm');
   const dialog = $('courtDialog');
   const replacementDialog = $('replacementDialog');
+  const manualDialog = $('manualLineupDialog');
+  const manualForm = $('manualLineupForm');
   let sessionId = null;
   let courts = [];
   let games = [];
   const previews = new Map();
+  let manualSubmitIntent = 'save';
 
   function nameFor(id, game) {
     const snapshot = game?.playerSnapshots?.[id];
@@ -172,9 +175,11 @@ export function initCourtsUI({ getSession, getEntries, showAlert, refreshRoster 
         if (preview?.lineup) {
           actions.append(button('Start this court', 'start', court.id, 'button-primary'));
           actions.append(button('Shuffle next', 'draw', court.id));
+          actions.append(button('Manual lineup', 'manual', court.id));
           actions.append(button('Clear draw', 'clear-draw', court.id, 'button-quiet'));
         } else {
           actions.append(button('Draw next game', 'draw', court.id, 'button-primary'));
+          actions.append(button('Manual lineup', 'manual', court.id));
         }
         actions.append(button('Settings', 'edit', court.id, 'button-quiet'));
         if (!preview?.lineup) actions.append(button('Delete', 'delete', court.id, 'button-quiet'));
@@ -325,6 +330,135 @@ export function initCourtsUI({ getSession, getEntries, showAlert, refreshRoster 
     }
   });
 
+  function availableCheckedInPlayers() {
+    const busy = new Set(games.filter((item) => item.status === 'active')
+      .flatMap((item) => [...(item.lineup?.sideA || []), ...(item.lineup?.sideB || [])]));
+    return getEntries()
+      .filter((entry) => entry.status === 'confirmed'
+        && entry.checkedIn
+        && entry.sittingOut !== true
+        && entry.playerId
+        && !busy.has(entry.playerId))
+      .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' }));
+  }
+
+  function fillManualSelect(select, players, { required = true } = {}) {
+    select.replaceChildren();
+    const blank = el('option', '', required ? 'Select player' : 'None');
+    blank.value = '';
+    select.append(blank);
+    for (const entry of players) {
+      const bits = [entry.name || 'Player', entry.skillLevel || ''];
+      if (entry.partnerPlayerId) {
+        const partner = getEntries().find((item) => item.playerId === entry.partnerPlayerId);
+        if (partner?.name) bits.push(`with ${partner.name}`);
+      }
+      const option = el('option', '', bits.filter(Boolean).join(' · '));
+      option.value = entry.playerId;
+      select.append(option);
+    }
+    select.required = required;
+  }
+
+  function openManualLineup(court) {
+    if (!court || !manualDialog) return;
+    const singles = court.format === 'singles';
+    const players = availableCheckedInPlayers();
+    $('manualLineupTitle').textContent = `Manual lineup · ${court.name}`;
+    $('manualCourtIdInput').value = court.id;
+    $('manualLineupHelp').textContent = players.length
+      ? (singles
+        ? 'Choose one checked-in player for each side.'
+        : 'Choose two checked-in players for Side A and two for Side B.')
+      : 'No checked-in players are free right now.';
+    fillManualSelect($('manualSideA1'), players, { required: true });
+    fillManualSelect($('manualSideA2'), players, { required: !singles });
+    fillManualSelect($('manualSideB1'), players, { required: true });
+    fillManualSelect($('manualSideB2'), players, { required: !singles });
+    const a2Label = $('manualSideA2')?.previousElementSibling;
+    const b2Label = $('manualSideB2')?.previousElementSibling;
+    $('manualSideA2').hidden = singles;
+    if (a2Label) a2Label.hidden = singles;
+    $('manualSideB2').hidden = singles;
+    if (b2Label) b2Label.hidden = singles;
+    $('saveManualLineup').disabled = !players.length;
+    $('startManualLineup').disabled = !players.length;
+    manualDialog.showModal();
+  }
+
+  function readManualLineup(court) {
+    const singles = court.format === 'singles';
+    const sideA = [$('manualSideA1').value, singles ? null : $('manualSideA2').value].filter(Boolean);
+    const sideB = [$('manualSideB1').value, singles ? null : $('manualSideB2').value].filter(Boolean);
+    const needed = singles ? 1 : 2;
+    if (sideA.length !== needed || sideB.length !== needed) {
+      throw new Error(singles
+        ? 'Pick one player for Side A and one for Side B.'
+        : 'Pick two players for Side A and two for Side B.');
+    }
+    const ids = [...sideA, ...sideB];
+    if (new Set(ids).size !== ids.length) {
+      throw new Error('Each player can appear only once in the matchup.');
+    }
+    const byId = new Map(getEntries().filter((entry) => entry.playerId).map((entry) => [entry.playerId, entry]));
+    return {
+      lineup: { sideA, sideB },
+      players: ids.map((id) => {
+        const entry = byId.get(id);
+        if (!entry) throw new Error('A selected player is no longer on today’s roster.');
+        return {
+          id,
+          name: entry.name,
+          skillLevel: entry.skillLevel,
+          division: entry.division || 'unspecified',
+          photoUrl: entry.photoData || null,
+          gamesPlayed: 0,
+        };
+      }),
+    };
+  }
+
+  $('cancelManualLineup')?.addEventListener('click', () => manualDialog?.close());
+  $('saveManualLineup')?.addEventListener('click', () => { manualSubmitIntent = 'save'; });
+  $('startManualLineup')?.addEventListener('click', () => { manualSubmitIntent = 'start'; });
+  manualForm?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const courtId = $('manualCourtIdInput').value;
+    const court = courts.find((item) => item.id === courtId);
+    if (!court || !sessionId) return;
+    const saveBtn = $('saveManualLineup');
+    const startBtn = $('startManualLineup');
+    saveBtn.disabled = true;
+    startBtn.disabled = true;
+    try {
+      const manual = readManualLineup(court);
+      const existing = previews.get(courtId);
+      previews.set(courtId, {
+        lineup: manual.lineup,
+        players: manual.players,
+        pool: existing?.pool || {
+          waiting: 0, onCourt: 0, eligible: manual.players.length,
+          needed: court.format === 'singles' ? 2 : 4,
+        },
+      });
+      if (manualSubmitIntent === 'start') {
+        await startCourtGame({ sessionId, courtId, lineup: manual.lineup });
+        previews.delete(courtId);
+        showAlert(`${court.name} started with your manual lineup.`, 'success');
+        await refreshRoster?.();
+      } else {
+        showAlert(`Manual lineup set for ${court.name}. Tap Start when ready.`, 'success');
+      }
+      manualDialog.close();
+      await refresh();
+    } catch (cause) {
+      showAlert(cause.message || 'Could not set that lineup.');
+    } finally {
+      saveBtn.disabled = false;
+      startBtn.disabled = false;
+    }
+  });
+
   grid.addEventListener('click', async (event) => {
     const control = event.target.closest('button[data-court-action]');
     if (!control || !sessionId) return;
@@ -334,6 +468,7 @@ export function initCourtsUI({ getSession, getEntries, showAlert, refreshRoster 
     const game = games.find((item) => item.id === id);
     if (action === 'edit') return openCourtDialog(court);
     if (action === 'replace') return openReplacement(game);
+    if (action === 'manual') return openManualLineup(court);
     if (action === 'delete' && !confirm(`Delete ${court?.name || 'this court'}?`)) return;
     if ((action === 'win-a' || action === 'win-b') &&
         !confirm(`Record Side ${action === 'win-a' ? 'A' : 'B'} as the winner? Each winner gains one win and each opponent gains one loss.`)) return;

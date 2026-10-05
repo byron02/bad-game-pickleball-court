@@ -493,6 +493,8 @@ input[type="datetime-local"].input {
 .court-card p { font-size: 11px; color: var(--muted); margin-top: 3px; }
 .court-card .badge { flex: 0 0 auto; }
 .court-settings { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 13px; }
+.manual-side-fields { display: grid; gap: 6px; margin-top: 14px; }
+.manual-side-fields .label-overline { margin-bottom: 2px; }
 .court-settings span { display: inline-flex; align-items: center; border-radius: 6px; background: var(--blue-pale); color: var(--blue); padding: 3px 6px; font-size: 10px; font-weight: 750; text-transform: capitalize; }
 .court-match { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 15px; }
 .court-side { display: flex; align-items: center; gap: 9px; margin: 6px 0; }

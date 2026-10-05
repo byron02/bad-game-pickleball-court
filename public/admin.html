@@ -349,6 +349,34 @@
     </form>
   </dialog>
 
+  <dialog id="manualLineupDialog" class="confirm-dialog court-dialog" aria-labelledby="manualLineupTitle">
+    <form id="manualLineupForm">
+      <h2 id="manualLineupTitle">Manual lineup</h2>
+      <p>Pick checked-in players for this court. Court skill and division rules still apply when you start.</p>
+      <input id="manualCourtIdInput" type="hidden">
+      <div id="manualSideAFields" class="manual-side-fields">
+        <span class="label-overline">Side A</span>
+        <label class="field-label" for="manualSideA1">Player 1</label>
+        <select id="manualSideA1" class="input manual-player-select" required></select>
+        <label class="field-label" for="manualSideA2">Player 2</label>
+        <select id="manualSideA2" class="input manual-player-select"></select>
+      </div>
+      <div id="manualSideBFields" class="manual-side-fields">
+        <span class="label-overline">Side B</span>
+        <label class="field-label" for="manualSideB1">Player 1</label>
+        <select id="manualSideB1" class="input manual-player-select" required></select>
+        <label class="field-label" for="manualSideB2">Player 2</label>
+        <select id="manualSideB2" class="input manual-player-select"></select>
+      </div>
+      <p id="manualLineupHelp" class="field-help"></p>
+      <div class="dialog-actions">
+        <button id="cancelManualLineup" class="button button-outline" type="button">Cancel</button>
+        <button id="saveManualLineup" class="button button-outline" type="submit" name="intent" value="save">Set as next</button>
+        <button id="startManualLineup" class="button button-primary" type="submit" name="intent" value="start">Start now</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="partnerDialog" class="confirm-dialog court-dialog" aria-labelledby="partnerDialogTitle">
     <form id="partnerForm">
       <h2 id="partnerDialogTitle">Lock doubles partners</h2>
