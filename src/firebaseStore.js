@@ -566,9 +566,24 @@ export async function rejectEntry(sessionId, entryId) { return closeEntry(sessio
 export async function removeEntry(sessionId, entryId) { return closeEntry(sessionId, entryId, 'removed'); }
 export async function checkOutEntry(sessionId, entryId) { return closeEntry(sessionId, entryId, 'checked_out'); }
 
+async function withContentionRetries(work) {
+  let lastError;
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    try {
+      return await work();
+    } catch (cause) {
+      lastError = cause;
+      const code = String(cause?.code || '');
+      if (!code.includes('failed-precondition') && !code.includes('aborted')) throw cause;
+      await new Promise((resolve) => setTimeout(resolve, 35 * (attempt + 1)));
+    }
+  }
+  throw lastError || error('The session changed while saving. Tap Refresh and try again.', 'aborted');
+}
+
 export async function checkInEntry(sessionId, entryId) {
   await ensureOrganizer();
-  await runTransaction(db, async (transaction) => {
+  await withContentionRetries(() => runTransaction(db, async (transaction) => {
     const sRef = sessionRef(sessionId);
     const eRef = entryRef(sessionId, entryId);
     const [session, entry] = await Promise.all([transaction.get(sRef), transaction.get(eRef)]);
@@ -580,7 +595,7 @@ export async function checkInEntry(sessionId, entryId) {
     transaction.update(sRef, {
       checkedInCount: increment(1), updatedAt: serverTimestamp(),
     });
-  });
+  }));
   return { checkedIn: true };
 }
 
@@ -588,7 +603,7 @@ export async function reservePlayer(sessionId, playerId, options = {}) {
   await ensureOrganizer();
   const checkIn = options.checkIn === true;
   const id = doc(collection(db, 'sessions', sessionId, 'entries')).id;
-  const result = await runTransaction(db, async (transaction) => {
+  const result = await withContentionRetries(() => runTransaction(db, async (transaction) => {
     const sRef = sessionRef(sessionId);
     const pRef = playerRef(playerId);
     const claim = claimRef(sessionId, playerId);
@@ -615,14 +630,13 @@ export async function reservePlayer(sessionId, playerId, options = {}) {
       checkedInAt: shouldCheckIn ? serverTimestamp() : null, checkedOutAt: null,
     });
     transaction.set(claim, { entryId: id, createdAt: serverTimestamp() });
-    transaction.update(sRef, {
-      confirmedCount: session.data().confirmedCount + (status === 'confirmed' ? 1 : 0),
-      waitlistCount: (session.data().waitlistCount || 0) + (status === 'waitlisted' ? 1 : 0),
-      checkedInCount: (session.data().checkedInCount || 0) + (shouldCheckIn ? 1 : 0),
-      updatedAt: serverTimestamp(),
-    });
+    const sessionPatch = { updatedAt: serverTimestamp() };
+    if (status === 'confirmed') sessionPatch.confirmedCount = increment(1);
+    else sessionPatch.waitlistCount = increment(1);
+    if (shouldCheckIn) sessionPatch.checkedInCount = increment(1);
+    transaction.update(sRef, sessionPatch);
     return { id, status, checkedIn: shouldCheckIn };
-  });
+  }));
   return { entry: result };
 }
 
