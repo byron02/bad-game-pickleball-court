@@ -36,6 +36,133 @@ service cloud.firestore {
         email.matches('^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$');
     }
 
+    function myEntryData(sessionId) {
+      return get(/databases/$(database)/documents/sessions/$(sessionId)/entries/$(request.auth.uid)).data;
+    }
+
+    function playerOwnAttendance(sessionId, entryId) {
+      let before = resource.data;
+      let after = request.resource.data;
+      let changed = after.diff(before).affectedKeys();
+      return anonymousPlayer() &&
+        entryId == request.auth.uid &&
+        before.status == 'confirmed' &&
+        before.ownerUid == request.auth.uid &&
+        changed.hasOnly([
+          'checkedIn', 'checkedInAt', 'sittingOut', 'checkedOutAt',
+          'status', 'updatedAt', 'partnerPlayerId', 'partnerRequestToPlayerId'
+        ]) &&
+        (
+          (
+            after.status == 'confirmed' &&
+            after.checkedIn is bool &&
+            after.sittingOut is bool &&
+            (after.sittingOut == false || after.checkedIn == true) &&
+            (
+              !changed.hasAny(['partnerPlayerId', 'partnerRequestToPlayerId']) ||
+              (
+                after.partnerPlayerId == before.partnerPlayerId &&
+                (
+                  after.partnerRequestToPlayerId == null ||
+                  (after.partnerRequestToPlayerId is string &&
+                    after.partnerRequestToPlayerId != before.playerId)
+                )
+              )
+            )
+          ) ||
+          (
+            after.status == 'checked_out' &&
+            after.checkedIn == false &&
+            after.sittingOut == false &&
+            after.partnerPlayerId == null &&
+            after.partnerRequestToPlayerId == null
+          )
+        );
+    }
+
+    // Mutual doubles requests: pending requests stay solo in draws until both lock.
+    function playerPartnerUpdate(sessionId, entryId) {
+      let before = resource.data;
+      let after = request.resource.data;
+      let changed = after.diff(before).affectedKeys();
+      let me = myEntryData(sessionId);
+      return anonymousPlayer() &&
+        me.status == 'confirmed' &&
+        me.ownerUid == request.auth.uid &&
+        me.playerId is string &&
+        me.playerId.size() > 0 &&
+        before.status == 'confirmed' &&
+        (
+          (
+            // Approve or decline an inbound request on the requester's entry.
+            entryId != request.auth.uid &&
+            before.partnerRequestToPlayerId == me.playerId &&
+            (
+              (
+                changed.hasOnly(['partnerRequestToPlayerId', 'updatedAt']) &&
+                after.partnerRequestToPlayerId == null
+              ) ||
+              (
+                changed.hasOnly(['partnerRequestToPlayerId', 'partnerPlayerId', 'updatedAt']) &&
+                after.partnerRequestToPlayerId == null &&
+                after.partnerPlayerId == me.playerId
+              )
+            )
+          ) ||
+          (
+            // Clear the other half when either partner unpairs.
+            entryId != request.auth.uid &&
+            before.partnerPlayerId == me.playerId &&
+            changed.hasOnly(['partnerPlayerId', 'updatedAt']) &&
+            after.partnerPlayerId == null
+          ) ||
+          (
+            // Own entry: send/cancel request, accept mutual lock, or unpair self.
+            entryId == request.auth.uid &&
+            before.ownerUid == request.auth.uid &&
+            changed.hasOnly(['partnerPlayerId', 'partnerRequestToPlayerId', 'updatedAt']) &&
+            (
+              (
+                after.partnerPlayerId == before.partnerPlayerId &&
+                (
+                  after.partnerRequestToPlayerId == null ||
+                  (after.partnerRequestToPlayerId is string &&
+                    after.partnerRequestToPlayerId != me.playerId)
+                )
+              ) ||
+              (
+                after.partnerRequestToPlayerId == null &&
+                (
+                  after.partnerPlayerId == null ||
+                  after.partnerPlayerId is string
+                )
+              )
+            )
+          )
+        );
+    }
+
+    function playerSessionAttendanceBump() {
+      let before = resource.data;
+      let after = request.resource.data;
+      let changed = after.diff(before).affectedKeys();
+      return anonymousPlayer() &&
+        before.open == true &&
+        changed.hasOnly(['checkedInCount', 'confirmedCount', 'updatedAt']) &&
+        after.checkedInCount is int &&
+        after.checkedInCount >= 0 &&
+        after.checkedInCount <= after.confirmedCount &&
+        after.confirmedCount is int &&
+        after.confirmedCount >= 0 &&
+        after.confirmedCount <= before.capacity &&
+        (
+          (after.checkedInCount == before.checkedInCount + 1 && after.confirmedCount == before.confirmedCount) ||
+          (after.checkedInCount == before.checkedInCount - 1 && after.confirmedCount == before.confirmedCount) ||
+          (after.checkedInCount == before.checkedInCount && after.confirmedCount == before.confirmedCount - 1) ||
+          (after.checkedInCount == before.checkedInCount - 1 && after.confirmedCount == before.confirmedCount - 1)
+        );
+    }
+
     function validName(name) {
       return name is string && name.size() >= 2 && name.size() <= 60;
     }
@@ -172,21 +299,32 @@ service cloud.firestore {
       // sessions or discover a token from the day index.
       allow get: if organizer() || (anonymousPlayer() && resource.data.open == true);
       allow list: if organizer();
-      allow create, update: if organizer() && validSession(request.resource.data);
+      allow create, update: if (organizer() && validSession(request.resource.data)) ||
+        playerSessionAttendanceBump();
       allow delete: if false;
 
       match /entries/{entryId} {
         allow get: if organizer() ||
           (anonymousPlayer() && entryId == request.auth.uid) ||
-          (signedIn() && resource.data.ownerUid == request.auth.uid);
-        allow list: if organizer();
+          (signedIn() && resource.data.ownerUid == request.auth.uid) ||
+          (anonymousPlayer() &&
+            get(/databases/$(database)/documents/sessions/$(sessionId)).data.open == true &&
+            resource.data.status == 'confirmed');
+        allow list: if organizer() ||
+          (anonymousPlayer() &&
+            get(/databases/$(database)/documents/sessions/$(sessionId)).data.open == true &&
+            resource.data.status == 'confirmed');
         allow create: if organizer() || validPublicRequest(sessionId, entryId);
-        allow update: if organizer();
+        allow update: if organizer() ||
+          playerOwnAttendance(sessionId, entryId) ||
+          playerPartnerUpdate(sessionId, entryId);
         allow delete: if false;
       }
 
       match /playerClaims/{playerId} {
-        allow read, write: if organizer();
+        allow read, create, update: if organizer();
+        allow delete: if organizer() ||
+          (anonymousPlayer() && resource.data.entryId == request.auth.uid);
       }
 
       match /playerLocks/{playerId} {
@@ -194,12 +332,16 @@ service cloud.firestore {
       }
 
       match /games/{gameId} {
-        allow read, write: if organizer();
+        allow read: if organizer() ||
+          (anonymousPlayer() &&
+            get(/databases/$(database)/documents/sessions/$(sessionId)).data.open == true);
+        allow write: if organizer();
       }
     }
 
     match /courts/{courtId} {
-      allow read, write: if organizer();
+      allow read: if organizer() || anonymousPlayer();
+      allow write: if organizer();
     }
   }
 }

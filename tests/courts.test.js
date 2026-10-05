@@ -114,6 +114,46 @@ test('confirmed reservations become eligible only after check-in', () => {
   assert.deepEqual(new Set(IDs(lineup)), new Set(['a', 'b', 'c', 'd']));
 });
 
+test('sitting out keeps a checked-in player reserved but out of draws', () => {
+  const players = [
+    player('a', 'beginner', 'woman'),
+    player('b', 'beginner', 'man'),
+    player('c', 'beginner', 'woman'),
+    player('d', 'beginner', 'man'),
+    player('resting', 'beginner', 'woman', { sittingOut: true, waitMinutes: 999 }),
+  ];
+  const lineup = proposeLineup({ court: court('court-1', ['beginner']), players, random: () => 0.5 });
+  assert.deepEqual(new Set(IDs(lineup)), new Set(['a', 'b', 'c', 'd']));
+  assert.equal(validateLineup({
+    court: court('court-1', ['beginner']),
+    lineup: { sideA: ['resting', 'a'], sideB: ['b', 'c'] },
+    players,
+  }).valid, false);
+  assert.deepEqual(courtPoolSummary({ players, activeGames: [] }), {
+    waiting: 4, onCourt: 0, checkedIn: 5,
+  });
+});
+
+test('pending partner requests do not lock doubles until both sides match', () => {
+  const players = [
+    player('me', 'intermediate', 'man', { waitMinutes: 40 }),
+    player('stef', 'intermediate', 'woman', { waitMinutes: 40 }),
+    player('a', 'intermediate', 'man', { waitMinutes: 10 }),
+    player('b', 'intermediate', 'woman', { waitMinutes: 10 }),
+  ];
+  const unlocked = proposeLineup({ court: court('court-1', ['intermediate']), players, random: () => 0.5 });
+  assert.ok(unlocked);
+  const locked = [
+    player('me', 'intermediate', 'man', { partnerId: 'stef', waitMinutes: 40 }),
+    player('stef', 'intermediate', 'woman', { partnerId: 'me', waitMinutes: 40 }),
+    player('a', 'intermediate', 'man', { waitMinutes: 10 }),
+    player('b', 'intermediate', 'woman', { waitMinutes: 10 }),
+  ];
+  const lineup = proposeLineup({ court: court('court-1', ['intermediate']), players: locked, random: () => 0.5 });
+  const withMe = lineup.sideA.includes('me') ? lineup.sideA : lineup.sideB;
+  assert.ok(withMe.includes('me') && withMe.includes('stef'));
+});
+
 test('a confirmed reservation with checkedIn true is eligible', () => {
   const players = [
     player('a', 'beginner', 'woman', { status: 'confirmed' }),

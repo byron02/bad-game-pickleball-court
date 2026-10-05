@@ -178,6 +178,7 @@ function normalizedEntry(snapshot, players = new Map()) {
     photoUrl: photoData,
     status: value.status,
     checkedIn: value.checkedIn === true,
+    sittingOut: value.sittingOut === true,
     source: value.source,
     ownerUid: value.ownerUid || null,
     createdAt: timestamp(value.createdAt),
@@ -186,6 +187,7 @@ function normalizedEntry(snapshot, players = new Map()) {
     checkedInAt: timestamp(value.checkedInAt),
     checkedOutAt: timestamp(value.checkedOutAt),
     partnerPlayerId: value.partnerPlayerId || null,
+    partnerRequestToPlayerId: value.partnerRequestToPlayerId || null,
   };
 }
 
@@ -557,6 +559,40 @@ export async function watchMySignup(sessionId, callback) {
   }, callback);
 }
 
+/** Confirmed roster for the player desk. Attendance actions stay owner-only. */
+export async function listPublicRoster(sessionId) {
+  await ensurePublicAuth();
+  const snapshots = await getDocs(query(
+    collection(db, 'sessions', String(sessionId || ''), 'entries'),
+    where('status', '==', 'confirmed'),
+  ));
+  return snapshots.docs
+    .map((snapshot) => normalizedEntry(snapshot))
+    .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' }));
+}
+
+export async function watchPublicRoster(sessionId, callback) {
+  await ensurePublicAuth();
+  return onSnapshot(
+    query(
+      collection(db, 'sessions', String(sessionId || ''), 'entries'),
+      where('status', '==', 'confirmed'),
+    ),
+    (snapshot) => {
+      const entries = snapshot.docs
+        .map((item) => normalizedEntry(item))
+        .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' }));
+      callback(entries);
+    },
+    (cause) => callback([], cause),
+  );
+}
+
+export async function getPublicAuthUid() {
+  const user = await ensurePublicAuth();
+  return user.uid;
+}
+
 async function listEntries(sessionId, players = new Map()) {
   const snapshots = await getDocs(query(
     collection(db, 'sessions', sessionId, 'entries'), orderBy('createdAt', 'asc'),
@@ -741,15 +777,18 @@ async function closeEntry(sessionId, entryId, status) {
     transaction.update(eRef, {
       status,
       checkedIn: false,
+      sittingOut: false,
       checkedOutAt: status === 'checked_out' ? serverTimestamp() : prior.checkedOutAt || null,
       reviewedAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
       partnerPlayerId: null,
+      partnerRequestToPlayerId: null,
     });
     if (existingClaim?.exists() && existingClaim.data().entryId === entryId) transaction.delete(claim);
     if (partnerEntry?.exists() && partnerEntry.data().partnerPlayerId === prior.playerId) {
       transaction.update(partnerEntry.ref, {
         partnerPlayerId: null,
+        partnerRequestToPlayerId: null,
         updatedAt: serverTimestamp(),
       });
     }
@@ -826,11 +865,13 @@ export async function setEntryPartner(sessionId, entryId, partnerPlayerId = null
     }
     transaction.update(eRef, {
       partnerPlayerId: partnerId,
+      partnerRequestToPlayerId: null,
       updatedAt: serverTimestamp(),
     });
     if (nextPartnerEntry) {
       transaction.update(nextPartnerEntry.ref, {
         partnerPlayerId: prior.playerId,
+        partnerRequestToPlayerId: null,
         updatedAt: serverTimestamp(),
       });
     }
@@ -868,14 +909,311 @@ export async function checkInEntry(sessionId, entryId) {
     const [session, entry] = await Promise.all([transaction.get(sRef), transaction.get(eRef)]);
     if (!session.exists() || !session.data().open) throw error('This session is closed.');
     if (!entry.exists() || entry.data().status !== 'confirmed') throw error('Only confirmed players can check in.');
-    if (entry.data().checkedIn) return;
-    transaction.update(eRef, { checkedIn: true, checkedInAt: serverTimestamp(), updatedAt: serverTimestamp() });
-    // Use increment so concurrent check-ins do not collide on checkedInCount.
-    transaction.update(sRef, {
-      checkedInCount: increment(1), updatedAt: serverTimestamp(),
+    const prior = entry.data();
+    if (prior.checkedIn && prior.sittingOut !== true) return;
+    const patch = {
+      checkedIn: true,
+      sittingOut: false,
+      updatedAt: serverTimestamp(),
+    };
+    if (!prior.checkedIn) patch.checkedInAt = serverTimestamp();
+    transaction.update(eRef, patch);
+    if (!prior.checkedIn) {
+      transaction.update(sRef, {
+        checkedInCount: increment(1), updatedAt: serverTimestamp(),
+      });
+    } else {
+      transaction.update(sRef, { updatedAt: serverTimestamp() });
+    }
+  }));
+  return { checkedIn: true, sittingOut: false };
+}
+
+export async function setEntrySittingOut(sessionId, entryId, sittingOut = true) {
+  await ensureOrganizer();
+  await runTransaction(db, async (transaction) => {
+    const eRef = entryRef(sessionId, entryId);
+    const entry = await transaction.get(eRef);
+    if (!entry.exists() || entry.data().status !== 'confirmed') {
+      throw error('Only confirmed players can sit out.');
+    }
+    if (!entry.data().checkedIn) throw error('Check the player in before sitting them out.');
+    if (sittingOut && entry.data().playerId) {
+      const lock = await transaction.get(playerLockRef(sessionId, entry.data().playerId));
+      if (lock.exists()) throw error('Finish or replace this player\'s current game first.');
+    }
+    transaction.update(eRef, {
+      sittingOut: sittingOut === true,
+      updatedAt: serverTimestamp(),
+    });
+  });
+  return { sittingOut: sittingOut === true };
+}
+
+async function playerAttendanceTransaction(sessionId, mutate) {
+  const user = await ensurePublicAuth();
+  if (!user.isAnonymous) throw error('Open your signup link on this phone to manage attendance.', 'auth-required');
+  await withContentionRetries(() => runTransaction(db, async (transaction) => {
+    const sRef = sessionRef(sessionId);
+    const eRef = entryRef(sessionId, user.uid);
+    const [session, entry] = await Promise.all([transaction.get(sRef), transaction.get(eRef)]);
+    if (!session.exists() || !session.data().open) throw error('This session is closed.');
+    if (!entry.exists() || entry.data().status !== 'confirmed') {
+      throw error('Your spot must be confirmed before you can check in.');
+    }
+    if (entry.data().ownerUid && entry.data().ownerUid !== user.uid) {
+      throw error('This signup belongs to another phone.', 'permission-denied');
+    }
+    mutate({ transaction, session, entry, sRef, eRef, user });
+  }));
+}
+
+/** Player self-serve: arrive and join the waiting pool. */
+export async function playerCheckIn(sessionId) {
+  await playerAttendanceTransaction(sessionId, ({ transaction, entry, sRef, eRef }) => {
+    const prior = entry.data();
+    if (prior.checkedIn && prior.sittingOut !== true) return;
+    const patch = { checkedIn: true, sittingOut: false, updatedAt: serverTimestamp() };
+    if (!prior.checkedIn) patch.checkedInAt = serverTimestamp();
+    transaction.update(eRef, patch);
+    if (!prior.checkedIn) {
+      transaction.update(sRef, { checkedInCount: increment(1), updatedAt: serverTimestamp() });
+    }
+  });
+  return { checkedIn: true, sittingOut: false };
+}
+
+/** Player self-serve: stay reserved, skip court draws until resume. */
+export async function playerSitOut(sessionId) {
+  await playerAttendanceTransaction(sessionId, ({ transaction, entry, eRef }) => {
+    const prior = entry.data();
+    if (!prior.checkedIn) throw error('Check in first, then sit out when you need a break.');
+    transaction.update(eRef, { sittingOut: true, updatedAt: serverTimestamp() });
+  });
+  return { sittingOut: true };
+}
+
+/** Player self-serve: return to the waiting pool after sitting out. */
+export async function playerResume(sessionId) {
+  await playerAttendanceTransaction(sessionId, ({ transaction, entry, eRef }) => {
+    const prior = entry.data();
+    if (!prior.checkedIn) throw error('Check in first to rejoin the waiting pool.');
+    transaction.update(eRef, { sittingOut: false, updatedAt: serverTimestamp() });
+  });
+  return { sittingOut: false };
+}
+
+/** Player self-serve: leave for today and free the confirmed spot. */
+export async function playerLeaveToday(sessionId) {
+  const user = await ensurePublicAuth();
+  if (!user.isAnonymous) throw error('Open your signup link on this phone to leave the session.', 'auth-required');
+  return closeEntryAsOwner(sessionId, user.uid);
+}
+
+async function closeEntryAsOwner(sessionId, entryId) {
+  const freed = await runTransaction(db, async (transaction) => {
+    const sRef = sessionRef(sessionId);
+    const eRef = entryRef(sessionId, entryId);
+    const [session, entry] = await Promise.all([transaction.get(sRef), transaction.get(eRef)]);
+    if (!session.exists() || !entry.exists()) throw error('Reservation not found.', 'not-found');
+    const prior = entry.data();
+    if (prior.status !== 'confirmed') throw error('Only a confirmed spot can leave for today.');
+    if (prior.ownerUid && prior.ownerUid !== entryId) {
+      throw error('This signup belongs to another phone.', 'permission-denied');
+    }
+    const claim = prior.playerId ? claimRef(sessionId, prior.playerId) : null;
+    const lock = prior.playerId ? await transaction.get(playerLockRef(sessionId, prior.playerId)) : null;
+    if (lock?.exists()) throw error('Finish your current game before leaving.');
+    const existingClaim = claim ? await transaction.get(claim) : null;
+    let partnerEntry = null;
+    if (prior.partnerPlayerId) {
+      const partnerClaim = await transaction.get(claimRef(sessionId, prior.partnerPlayerId));
+      if (partnerClaim.exists()) {
+        partnerEntry = await transaction.get(entryRef(sessionId, partnerClaim.data().entryId));
+      }
+    }
+    transaction.update(eRef, {
+      status: 'checked_out',
+      checkedIn: false,
+      sittingOut: false,
+      checkedOutAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      partnerPlayerId: null,
+      partnerRequestToPlayerId: null,
+    });
+    if (partnerEntry?.exists() && partnerEntry.data().partnerPlayerId === prior.playerId) {
+      transaction.update(partnerEntry.ref, {
+        partnerPlayerId: null,
+        updatedAt: serverTimestamp(),
+      });
+    }
+    if (existingClaim?.exists() && existingClaim.data().entryId === entryId) transaction.delete(claim);
+    const sessionPatch = {
+      confirmedCount: Math.max(0, (session.data().confirmedCount || 0) - 1),
+      updatedAt: serverTimestamp(),
+    };
+    if (prior.checkedIn) sessionPatch.checkedInCount = increment(-1);
+    transaction.update(sRef, sessionPatch);
+    return true;
+  });
+  if (freed) await promoteOldest(sessionId);
+  return { status: 'checked_out' };
+}
+
+async function findConfirmedEntryByPlayerId(transaction, sessionId, playerId) {
+  const claim = await transaction.get(claimRef(sessionId, playerId));
+  if (!claim.exists()) return null;
+  const entry = await transaction.get(entryRef(sessionId, claim.data().entryId));
+  if (!entry.exists() || entry.data().status !== 'confirmed') return null;
+  return entry;
+}
+
+/** Player desk: ask another confirmed player to lock as doubles partners. Pending stays solo. */
+export async function requestPartner(sessionId, partnerPlayerId) {
+  const partnerId = idOfPlayer(partnerPlayerId);
+  const user = await ensurePublicAuth();
+  if (!user.isAnonymous) throw error('Open your signup link on this phone to manage pairing.', 'auth-required');
+  await withContentionRetries(() => runTransaction(db, async (transaction) => {
+    const eRef = entryRef(sessionId, user.uid);
+    const mine = await transaction.get(eRef);
+    if (!mine.exists() || mine.data().status !== 'confirmed') {
+      throw error('Your spot must be confirmed before you can pair.');
+    }
+    const prior = mine.data();
+    if (!prior.playerId) throw error('Pairing needs an approved player profile.');
+    if (prior.ownerUid && prior.ownerUid !== user.uid) {
+      throw error('This signup belongs to another phone.', 'permission-denied');
+    }
+    if (prior.partnerPlayerId) throw error('Unpair your current partner before requesting someone else.');
+    if (partnerId === prior.playerId) throw error('You cannot pair with yourself.');
+    const partner = await findConfirmedEntryByPlayerId(transaction, sessionId, partnerId);
+    if (!partner) throw error('That player is not confirmed for today.');
+    if (partner.data().partnerPlayerId) throw error('That player is already paired.');
+    if (partner.data().sittingOut === true || prior.sittingOut === true) {
+      throw error('Both players need to be available (not sitting out) to pair.');
+    }
+    transaction.update(eRef, {
+      partnerRequestToPlayerId: partnerId,
+      updatedAt: serverTimestamp(),
     });
   }));
-  return { checkedIn: true };
+  return { partnerRequestToPlayerId: partnerId };
+}
+
+/** Player desk: cancel your outbound pair request. */
+export async function cancelPartnerRequest(sessionId) {
+  const user = await ensurePublicAuth();
+  await runTransaction(db, async (transaction) => {
+    const eRef = entryRef(sessionId, user.uid);
+    const mine = await transaction.get(eRef);
+    if (!mine.exists() || mine.data().status !== 'confirmed') throw error('Reservation not found.');
+    if (mine.data().ownerUid && mine.data().ownerUid !== user.uid) {
+      throw error('This signup belongs to another phone.', 'permission-denied');
+    }
+    transaction.update(eRef, {
+      partnerRequestToPlayerId: null,
+      updatedAt: serverTimestamp(),
+    });
+  });
+  return { partnerRequestToPlayerId: null };
+}
+
+/** Player desk: approve an inbound pair request and lock both sides. */
+export async function approvePartnerRequest(sessionId, requesterEntryId) {
+  const user = await ensurePublicAuth();
+  if (!user.isAnonymous) throw error('Open your signup link on this phone to manage pairing.', 'auth-required');
+  const requesterId = String(requesterEntryId || '').trim();
+  if (!requesterId || requesterId.includes('/')) throw error('Request is invalid.');
+  await withContentionRetries(() => runTransaction(db, async (transaction) => {
+    const myRef = entryRef(sessionId, user.uid);
+    const theirRef = entryRef(sessionId, requesterId);
+    const [mine, theirs] = await Promise.all([transaction.get(myRef), transaction.get(theirRef)]);
+    if (!mine.exists() || mine.data().status !== 'confirmed') throw error('Your spot must be confirmed.');
+    if (!theirs.exists() || theirs.data().status !== 'confirmed') throw error('That request is no longer available.');
+    const me = mine.data();
+    const them = theirs.data();
+    if (me.ownerUid && me.ownerUid !== user.uid) {
+      throw error('This signup belongs to another phone.', 'permission-denied');
+    }
+    if (!me.playerId || !them.playerId) throw error('Both players need approved profiles to pair.');
+    if (them.partnerRequestToPlayerId !== me.playerId) {
+      throw error('That pair request was cancelled or already handled.');
+    }
+    if (me.partnerPlayerId || them.partnerPlayerId) {
+      throw error('One of you is already paired. Decline and stay solo, or unpair first.');
+    }
+    transaction.update(theirRef, {
+      partnerPlayerId: me.playerId,
+      partnerRequestToPlayerId: null,
+      updatedAt: serverTimestamp(),
+    });
+    transaction.update(myRef, {
+      partnerPlayerId: them.playerId,
+      partnerRequestToPlayerId: null,
+      updatedAt: serverTimestamp(),
+    });
+  }));
+  return { paired: true };
+}
+
+/** Player desk: decline an inbound pair request; both stay solo. */
+export async function declinePartnerRequest(sessionId, requesterEntryId) {
+  const user = await ensurePublicAuth();
+  if (!user.isAnonymous) throw error('Open your signup link on this phone to manage pairing.', 'auth-required');
+  const requesterId = String(requesterEntryId || '').trim();
+  if (!requesterId || requesterId.includes('/')) throw error('Request is invalid.');
+  await runTransaction(db, async (transaction) => {
+    const myRef = entryRef(sessionId, user.uid);
+    const theirRef = entryRef(sessionId, requesterId);
+    const [mine, theirs] = await Promise.all([transaction.get(myRef), transaction.get(theirRef)]);
+    if (!mine.exists() || mine.data().status !== 'confirmed') throw error('Your spot must be confirmed.');
+    if (!theirs.exists()) return;
+    const me = mine.data();
+    if (me.ownerUid && me.ownerUid !== user.uid) {
+      throw error('This signup belongs to another phone.', 'permission-denied');
+    }
+    if (theirs.data().partnerRequestToPlayerId !== me.playerId) return;
+    transaction.update(theirRef, {
+      partnerRequestToPlayerId: null,
+      updatedAt: serverTimestamp(),
+    });
+  });
+  return { declined: true };
+}
+
+/** Player desk: clear a locked doubles pair; both return to solo for draws. */
+export async function clearMyPartner(sessionId) {
+  const user = await ensurePublicAuth();
+  if (!user.isAnonymous) throw error('Open your signup link on this phone to manage pairing.', 'auth-required');
+  await withContentionRetries(() => runTransaction(db, async (transaction) => {
+    const myRef = entryRef(sessionId, user.uid);
+    const mine = await transaction.get(myRef);
+    if (!mine.exists() || mine.data().status !== 'confirmed') throw error('Your spot must be confirmed.');
+    const me = mine.data();
+    if (me.ownerUid && me.ownerUid !== user.uid) {
+      throw error('This signup belongs to another phone.', 'permission-denied');
+    }
+    if (!me.partnerPlayerId) {
+      transaction.update(myRef, {
+        partnerRequestToPlayerId: null,
+        updatedAt: serverTimestamp(),
+      });
+      return;
+    }
+    const partner = await findConfirmedEntryByPlayerId(transaction, sessionId, me.partnerPlayerId);
+    transaction.update(myRef, {
+      partnerPlayerId: null,
+      partnerRequestToPlayerId: null,
+      updatedAt: serverTimestamp(),
+    });
+    if (partner?.exists() && partner.data().partnerPlayerId === me.playerId) {
+      transaction.update(partner.ref, {
+        partnerPlayerId: null,
+        updatedAt: serverTimestamp(),
+      });
+    }
+  }));
+  return { partnerPlayerId: null };
 }
 
 export async function reservePlayer(sessionId, playerId, options = {}) {

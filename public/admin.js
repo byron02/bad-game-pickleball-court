@@ -3,6 +3,7 @@ import {
   signOutOrganizer, approveEntry, rejectEntry, removeEntry, checkInEntry, checkOutEntry,
   reservePlayer, updatePlayer, updateSession, resetSession, setEntryPartner,
   createAndReservePlayer, getCurrentUser, listOrganizers, addOrganizer, removeOrganizer,
+  setEntrySittingOut,
 } from '../src/firebaseStore.js';
 import { initCourtsUI } from './courts-ui.js';
 
@@ -26,6 +27,7 @@ const ui = {
   confirmedViewGrid: $('confirmedViewGrid'), confirmedViewList: $('confirmedViewList'),
   confirmedSearch: $('confirmedSearch'),
   directorySearch: $('directorySearch'), directoryList: $('directoryList'), shareLink: $('shareLinkText'),
+  playLink: $('playLinkText'), copyPlayLink: $('copyPlayLinkButton'),
   copyLink: $('copyLinkButton'), copyLinkSecondary: $('copyLinkSecondary'), refresh: $('refreshButton'),
   reset: $('resetButton'), resetDialog: $('resetDialog'), resetForm: $('resetForm'), resetConfirm: $('resetConfirm'), cancelReset: $('cancelReset'),
   navPendingPill: $('navPendingPill'), mobilePendingPill: $('mobilePendingPill'),
@@ -39,6 +41,7 @@ let players = [];
 let selectedDate = null;
 let unsubscribeDashboard = null;
 let activeShareLink = '';
+let activePlayLink = '';
 let currentView = 'overview';
 let currentOrganizerUid = null;
 const pendingSkillByEntry = new Map();
@@ -378,7 +381,10 @@ function renderEntry(entry, kind) {
   const top = node('div', 'entry-top');
   top.append(node('strong', '', entry.name || 'Unnamed player'));
   if (kind === 'pending') top.append(statusBadge(entry.playerId ? 'Existing player claim' : 'New profile', entry.playerId ? 'blue' : 'amber'));
-  if (kind === 'confirmed') top.append(statusBadge(entry.checkedIn ? 'Checked in' : 'Reserved', entry.checkedIn ? 'green' : 'blue'));
+  if (kind === 'confirmed') {
+    if (entry.sittingOut) top.append(statusBadge('Sitting out', 'amber'));
+    else top.append(statusBadge(entry.checkedIn ? 'Checked in' : 'Reserved', entry.checkedIn ? 'green' : 'blue'));
+  }
   if (kind === 'waitlist') top.append(statusBadge('Waitlist', 'amber'));
   if (kind === 'confirmed' && entry.partnerPlayerId) {
     top.append(statusBadge(`With ${partnerName(entry)}`, 'amber'));
@@ -406,7 +412,14 @@ function renderEntry(entry, kind) {
     actions.append(actionButton('Approve', 'approve', entry.id, 'button-primary'));
     actions.append(actionButton('Reject', 'reject', entry.id, 'button-outline'));
   } else if (kind === 'confirmed') {
-    actions.append(actionButton(entry.checkedIn ? 'Check out' : 'Check in', entry.checkedIn ? 'check-out' : 'check-in', entry.id, entry.checkedIn ? 'button-outline' : 'button-primary'));
+    if (!entry.checkedIn) {
+      actions.append(actionButton('Check in', 'check-in', entry.id, 'button-primary'));
+    } else if (entry.sittingOut) {
+      actions.append(actionButton('Resume', 'resume', entry.id, 'button-primary'));
+    } else {
+      actions.append(actionButton('Sit out', 'sit-out', entry.id, 'button-outline'));
+      actions.append(actionButton('Leave today', 'check-out', entry.id, 'button-outline'));
+    }
     if (entry.playerId) {
       actions.append(actionButton(entry.partnerPlayerId ? 'Change pair' : 'Pair doubles', 'pair', entry.id, 'button-outline'));
       if (entry.partnerPlayerId) actions.append(actionButton('Unpair', 'unpair', entry.id, 'button-quiet'));
@@ -654,9 +667,12 @@ function renderDashboard(data) {
   renderDirectory();
 
   activeShareLink = session.signupUrl || `${location.origin}/join?token=${encodeURIComponent(session.shareToken || session.id)}`;
+  activePlayLink = `${location.origin}/play?token=${encodeURIComponent(session.shareToken || session.id)}`;
   ui.shareLink.textContent = activeShareLink;
+  if (ui.playLink) ui.playLink.textContent = activePlayLink;
   ui.copyLink.disabled = false;
   ui.copyLinkSecondary.disabled = false;
+  if (ui.copyPlayLink) ui.copyPlayLink.disabled = false;
   renderDayStrip(session.date || selectedDate);
 }
 
@@ -734,6 +750,19 @@ async function runEntryAction(action, entryId, button) {
     approve: approveEntry, reject: rejectEntry, remove: removeEntry,
     'check-in': checkInEntry, 'check-out': checkOutEntry,
   };
+  if (action === 'sit-out' || action === 'resume') {
+    button.disabled = true;
+    try {
+      await setEntrySittingOut(session.id, entryId, action === 'sit-out');
+      await refreshDashboard();
+      showAlert(action === 'sit-out' ? 'Player is sitting out of draws.' : 'Player is back in the waiting pool.', 'success');
+    } catch (error) {
+      showAlert(friendlyError(error));
+    } finally {
+      button.disabled = false;
+    }
+    return;
+  }
   const fn = operations[action];
   if (!fn) return;
   if (action === 'remove') {
@@ -1008,8 +1037,18 @@ async function copyLink() {
     showAlert('Clipboard access failed. Select and copy the link shown in Session settings.');
   }
 }
+async function copyPlayLink() {
+  if (!activePlayLink) return;
+  try {
+    await navigator.clipboard.writeText(activePlayLink);
+    showAlert('Player desk link copied. Players use it to check in or sit out.', 'success');
+  } catch {
+    showAlert('Clipboard access failed. Select and copy the player desk link in Session settings.');
+  }
+}
 ui.copyLink.addEventListener('click', copyLink);
 ui.copyLinkSecondary.addEventListener('click', copyLink);
+ui.copyPlayLink?.addEventListener('click', copyPlayLink);
 ui.refresh.addEventListener('click', async () => {
   ui.refresh.disabled = true;
   try {

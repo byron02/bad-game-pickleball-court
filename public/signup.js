@@ -209,7 +209,17 @@ function showSuccess(entry) {
     paragraph.textContent = 'You are on the waitlist. The organizer can confirm your spot when one opens.';
   } else if (entry?.status === 'confirmed') {
     elements.successTitle.textContent = 'Your spot is confirmed';
-    paragraph.textContent = 'Your spot is confirmed. Please check in with the organizer when you arrive.';
+    paragraph.textContent = 'Your spot is confirmed. Open the player desk link to check in, sit out, or leave — only this phone can change your status.';
+    let play = elements.success.querySelector('[data-play-link]');
+    if (!play) {
+      play = document.createElement('a');
+      play.dataset.playLink = 'true';
+      play.className = 'button button-primary button-wide';
+      play.style.marginTop = '16px';
+      elements.success.append(play);
+    }
+    play.href = `/play?token=${encodeURIComponent(token || currentSession?.id || '')}`;
+    play.textContent = 'Open player desk';
   } else if (['rejected', 'removed', 'checked_out'].includes(entry?.status)) {
     elements.successTitle.textContent = 'Request closed';
     paragraph.textContent = 'The organizer did not confirm this signup. Please contact them if you think this was a mistake.';

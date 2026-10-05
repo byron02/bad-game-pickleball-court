@@ -6,8 +6,10 @@ import {
   getDocs,
   getFirestore,
   onSnapshot,
+  query,
   runTransaction,
   serverTimestamp,
+  where,
 } from 'firebase/firestore';
 import { firebaseConfig } from './firebaseConfig.js';
 import { getCurrentUser } from './firebaseStore.js';
@@ -202,6 +204,7 @@ function domainPlayer(entry) {
     skill: entry.skillLevel,
     gender: entry.division || 'unspecified',
     checkedIn: entry.status === 'confirmed' && entry.checkedIn === true,
+    sittingOut: entry.sittingOut === true,
     partnerId: entry.partnerPlayerId || null,
   };
 }
@@ -302,6 +305,147 @@ export async function proposeCourtLineup({ sessionId, courtId, random = Math.ran
       eligible: eligible.length,
       needed: court.data().format === 'singles' ? 2 : 4,
     },
+  };
+}
+
+function lineupPlayerIds(lineup) {
+  return [...(lineup?.sideA || []), ...(lineup?.sideB || [])];
+}
+
+function namesForLineup(lineup, nameById) {
+  const label = (ids) => (ids || []).map((id) => nameById.get(id) || 'Player').join(' + ');
+  return {
+    sideA: label(lineup?.sideA),
+    sideB: label(lineup?.sideB),
+  };
+}
+
+/**
+ * Player desk board: active court assignment plus the same “up next” draw the
+ * organizer preview uses (pending pairs stay solo until both lock).
+ */
+export async function loadPublicPlayBoard(sessionId, playerId = null) {
+  const sid = idOf(sessionId, 'Session id');
+  const [courtsSnap, gamesSnap, entriesSnap] = await Promise.all([
+    getDocs(collection(db, 'courts')),
+    getDocs(collection(db, 'sessions', sid, 'games')),
+    getDocs(query(collection(db, 'sessions', sid, 'entries'), where('status', '==', 'confirmed'))),
+  ]);
+  const courts = sortedCourts(courtsSnap);
+  const games = sortedGames(gamesSnap);
+  const roster = entriesSnap.docs.map((snapshot) => ({ id: snapshot.id, ...snapshot.data() }));
+  const nameById = new Map(roster.filter((entry) => entry.playerId).map((entry) => [entry.playerId, entry.name]));
+  for (const game of games) {
+    for (const [id, snap] of Object.entries(game.playerSnapshots || {})) {
+      if (!nameById.has(id) && snap?.name) nameById.set(id, snap.name);
+    }
+  }
+  const players = statsFromGames(roster, games);
+  const active = games.filter((game) => game.status === 'active');
+  const playingGame = playerId
+    ? active.find((game) => lineupPlayerIds(game.lineup).includes(playerId))
+    : null;
+
+  const nextByCourt = [];
+  for (const court of courts) {
+    const lineup = proposeLineup({
+      court: { id: court.id, ...court },
+      players,
+      activeGames: games,
+      random: () => 0.37,
+    });
+    if (!lineup) continue;
+    nextByCourt.push({
+      courtId: court.id,
+      courtName: court.name,
+      lineup,
+      labels: namesForLineup(lineup, nameById),
+      includesMe: playerId ? lineupPlayerIds(lineup).includes(playerId) : false,
+    });
+  }
+
+  const myNext = nextByCourt.find((item) => item.includesMe) || null;
+  return {
+    courts,
+    activeGames: active.map((game) => ({
+      id: game.id,
+      courtId: game.courtId,
+      courtName: game.courtName,
+      lineup: game.lineup,
+      labels: namesForLineup(game.lineup, nameById),
+      includesMe: playerId ? lineupPlayerIds(game.lineup).includes(playerId) : false,
+    })),
+    nextByCourt,
+    assignment: playingGame
+      ? {
+        kind: 'playing',
+        courtId: playingGame.courtId,
+        courtName: playingGame.courtName || 'Court',
+        lineup: playingGame.lineup,
+        labels: namesForLineup(playingGame.lineup, nameById),
+      }
+      : myNext
+        ? {
+          kind: 'next',
+          courtId: myNext.courtId,
+          courtName: myNext.courtName,
+          lineup: myNext.lineup,
+          labels: myNext.labels,
+        }
+        : { kind: 'waiting' },
+  };
+}
+
+export function watchPublicPlayBoard(sessionId, playerId, callback) {
+  const sid = idOf(sessionId, 'Session id');
+  let courts = [];
+  let games = [];
+  let roster = [];
+  let stopped = false;
+
+  const emit = async () => {
+    if (stopped) return;
+    try {
+      const board = await loadPublicPlayBoard(sid, playerId);
+      if (!stopped) callback(board);
+    } catch (cause) {
+      if (!stopped) callback(null, cause);
+    }
+  };
+
+  // Debounce rapid multi-listener ticks into one board rebuild.
+  let timer = null;
+  const schedule = () => {
+    clearTimeout(timer);
+    timer = setTimeout(emit, 80);
+  };
+
+  const stopCourts = onSnapshot(collection(db, 'courts'), (snapshot) => {
+    courts = sortedCourts(snapshot);
+    schedule();
+  }, (cause) => callback(null, cause));
+  const stopGames = onSnapshot(collection(db, 'sessions', sid, 'games'), (snapshot) => {
+    games = sortedGames(snapshot);
+    schedule();
+  }, (cause) => callback(null, cause));
+  const stopEntries = onSnapshot(
+    query(collection(db, 'sessions', sid, 'entries'), where('status', '==', 'confirmed')),
+    (snapshot) => {
+      roster = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
+      schedule();
+    },
+    (cause) => callback(null, cause),
+  );
+
+  return () => {
+    stopped = true;
+    clearTimeout(timer);
+    stopCourts();
+    stopGames();
+    stopEntries();
+    void courts;
+    void games;
+    void roster;
   };
 }
 

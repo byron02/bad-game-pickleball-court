@@ -1,11 +1,12 @@
 /**
  * Storage-independent rules for configuring and running one court at a time.
  *
- * A player is { id, skill, gender, checkedIn, waitMinutes?, gamesPlayed?,
+ * A player is { id, skill, gender, checkedIn, sittingOut?, waitMinutes?, gamesPlayed?,
  * partnerId?, recentPartnerIds?, recentOpponentIds? }.
  * `partnerId` locks two players as a doubles pair for draws (they stay on the
  * same side). `status: "checked_in"` is also accepted instead of
- * `checkedIn: true`. A lineup is { sideA: [playerId, ...], sideB: [playerId, ...] }.
+ * `checkedIn: true`. `sittingOut: true` keeps them checked in but out of draws.
+ * A lineup is { sideA: [playerId, ...], sideB: [playerId, ...] }.
  */
 
 export const SKILLS = Object.freeze(['beginner', 'intermediate', 'advanced']);
@@ -37,6 +38,10 @@ function divisionOf(court) {
 function isCheckedIn(player) {
   if (typeof player.checkedIn === 'boolean') return player.checkedIn;
   return player.status === 'checked_in';
+}
+
+function isAvailableForDraw(player) {
+  return isCheckedIn(player) && player?.sittingOut !== true;
 }
 
 function arrayOfIds(value) {
@@ -139,6 +144,7 @@ export function validateLineup({ court, lineup, players, activeGames = [] }) {
       continue;
     }
     if (!isCheckedIn(player)) errors.push(`Player ${id} is not checked in.`);
+    if (player.sittingOut === true) errors.push(`Player ${id} is sitting out.`);
     if (!skills.has(skillOf(player.skill))) {
       errors.push(`Player ${id} is not eligible for this court's skill setting.`);
     }
@@ -179,7 +185,7 @@ function priority(player, random) {
     randomUnit(random) * 2;
 }
 
-/** Checked-in players eligible for this court who are not already on a court. */
+/** Checked-in players eligible for this court who are not sitting out or already on a court. */
 export function eligiblePlayersForCourt({ court, players, activeGames = [] }) {
   const config = validateCourtConfig(court);
   if (!config.valid) return [];
@@ -187,7 +193,7 @@ export function eligiblePlayersForCourt({ court, players, activeGames = [] }) {
   const skills = new Set(allowedSkills(court));
   const division = divisionOf(court);
   return (Array.isArray(players) ? players : [])
-    .filter((player) => validId(player?.id) && isCheckedIn(player) &&
+    .filter((player) => validId(player?.id) && isAvailableForDraw(player) &&
       skills.has(skillOf(player.skill)) && !busy.has(player.id) &&
       (division === 'open' || division === 'mixed' ||
        genderOf(player.gender) === (division === 'women' ? 'woman' : 'man')));
@@ -196,7 +202,7 @@ export function eligiblePlayersForCourt({ court, players, activeGames = [] }) {
 export function courtPoolSummary({ players, activeGames = [] }) {
   const roster = Array.isArray(players) ? players : [];
   const busy = activePlayerIds(activeGames);
-  const waiting = roster.filter((player) => isCheckedIn(player) && !busy.has(player.id)).length;
+  const waiting = roster.filter((player) => isAvailableForDraw(player) && !busy.has(player.id)).length;
   return { waiting, onCourt: busy.size, checkedIn: roster.filter((player) => isCheckedIn(player)).length };
 }
 

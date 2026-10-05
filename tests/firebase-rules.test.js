@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebase/rules-unit-testing';
 import {
   collection, doc, endAt, getDoc, getDocs, limit, orderBy, query, serverTimestamp,
-  setDoc, startAt, updateDoc,
+  setDoc, startAt, updateDoc, where,
 } from 'firebase/firestore';
 
 // Run with:
@@ -138,8 +138,52 @@ test('public search reads only the approved directory; full profiles and session
     }));
     await assertFails(getDocs(collection(db, 'players')));
     await assertFails(getDocs(collection(db, 'sessions')));
-    await assertFails(getDocs(collection(db, 'sessions', sessionId, 'entries')));
-    await assertFails(getDoc(doc(db, 'courts', 'court-1')));
+    await assertSucceeds(getDocs(query(
+      collection(db, 'sessions', sessionId, 'entries'),
+      where('status', '==', 'confirmed'),
+    )));
+    await assertSucceeds(getDocs(collection(db, 'courts')));
+  });
+
+test('player desk can list open courts and own attendance, but not sit someone else out',
+  { skip: !enabled }, async () => {
+    await env.withSecurityRulesDisabled(async (context) => {
+      const db = context.firestore();
+      await setDoc(doc(db, 'courts', 'court-2'), {
+        name: 'Court 2', allowedSkills: ['beginner'], division: 'open', format: 'doubles',
+        activeGameId: null, activeSessionId: null,
+      });
+      await setDoc(doc(db, 'sessions', sessionId, 'entries', 'player-one'), request('player-one', {
+        status: 'confirmed', playerId: 'p1', name: 'Alex', skillLevel: 'beginner',
+        checkedIn: true, sittingOut: false, partnerPlayerId: null, partnerRequestToPlayerId: null,
+      }));
+      await setDoc(doc(db, 'sessions', sessionId, 'entries', 'player-two'), request('player-two', {
+        status: 'confirmed', playerId: 'p2', name: 'Stefanny', skillLevel: 'beginner',
+        checkedIn: true, sittingOut: false, partnerPlayerId: null, partnerRequestToPlayerId: null,
+      }));
+      await updateDoc(doc(db, 'sessions', sessionId), { confirmedCount: 2, checkedInCount: 2 });
+    });
+    const alex = env.authenticatedContext('player-one', anonymous).firestore();
+    const stef = env.authenticatedContext('player-two', anonymous).firestore();
+    await assertSucceeds(getDocs(collection(alex, 'courts')));
+    await assertSucceeds(updateDoc(doc(alex, 'sessions', sessionId, 'entries', 'player-one'), {
+      sittingOut: true,
+    }));
+    await assertFails(updateDoc(doc(alex, 'sessions', sessionId, 'entries', 'player-two'), {
+      sittingOut: true,
+    }));
+    await assertSucceeds(updateDoc(doc(alex, 'sessions', sessionId, 'entries', 'player-one'), {
+      sittingOut: false,
+      partnerRequestToPlayerId: 'p2',
+    }));
+    await assertSucceeds(updateDoc(doc(stef, 'sessions', sessionId, 'entries', 'player-one'), {
+      partnerRequestToPlayerId: null,
+      partnerPlayerId: 'p2',
+    }));
+    await assertSucceeds(updateDoc(doc(stef, 'sessions', sessionId, 'entries', 'player-two'), {
+      partnerPlayerId: 'p1',
+      partnerRequestToPlayerId: null,
+    }));
   });
 
 test('closed signup links reject new requests', { skip: !enabled }, async () => {
