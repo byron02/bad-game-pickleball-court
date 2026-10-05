@@ -54,12 +54,14 @@
 
       <div id="inboundRequests" class="play-inbound" hidden></div>
 
-      <label class="field-label" for="rosterSearch">Search your name</label>
-      <div class="search-field">
-        <span aria-hidden="true">⌕</span>
-        <input id="rosterSearch" type="search" placeholder="Type your name" autocomplete="off">
+      <div id="rosterPicker" class="play-roster-picker">
+        <label class="field-label" for="rosterSearch">Search your name</label>
+        <div class="search-field">
+          <span aria-hidden="true">⌕</span>
+          <input id="rosterSearch" type="search" placeholder="Type your name" autocomplete="off">
+        </div>
+        <div id="rosterResults" class="search-results play-results" aria-live="polite"></div>
       </div>
-      <div id="rosterResults" class="search-results play-results" aria-live="polite"></div>
 
       <div id="selectedPanel" class="play-selected" hidden>
         <div class="play-selected-head">
@@ -68,6 +70,7 @@
             <strong id="selectedName">Player</strong>
             <small id="selectedMeta">Status</small>
           </div>
+          <button id="changeNameButton" class="play-change-name" type="button">Change</button>
         </div>
         <p id="selectedNote" class="field-help"></p>
 
@@ -87,8 +90,8 @@
 
         <div id="pairPanel" class="play-view play-pair" hidden>
           <p id="pairStatus" class="field-help">You play as a solo until both of you lock the pair.</p>
-          <label class="field-label" for="pairSearch">Request a partner</label>
-          <div class="search-field">
+          <label id="pairSearchLabel" class="field-label" for="pairSearch">Request a partner</label>
+          <div id="pairSearchField" class="search-field">
             <span aria-hidden="true">⌕</span>
             <input id="pairSearch" type="search" placeholder="Search a name to pair" autocomplete="off">
           </div>

@@ -19,6 +19,7 @@ const ui = {
   boardTitle: $('boardTitle'),
   boardDetail: $('boardDetail'),
   inbound: $('inboundRequests'),
+  rosterPicker: $('rosterPicker'),
   search: $('rosterSearch'),
   results: $('rosterResults'),
   selected: $('selectedPanel'),
@@ -26,6 +27,7 @@ const ui = {
   selectedName: $('selectedName'),
   selectedMeta: $('selectedMeta'),
   selectedNote: $('selectedNote'),
+  changeName: $('changeNameButton'),
   deskTabs: $('deskTabs'),
   statusTab: $('statusTabButton'),
   pairTab: $('pairTabButton'),
@@ -49,6 +51,8 @@ const ui = {
   leave: $('leaveButton'),
   pairPanel: $('pairPanel'),
   pairStatus: $('pairStatus'),
+  pairSearchLabel: $('pairSearchLabel'),
+  pairSearchField: $('pairSearchField'),
   pairSearch: $('pairSearch'),
   pairCandidates: $('pairCandidates'),
   pairActions: $('pairActions'),
@@ -269,6 +273,27 @@ function closePinModal() {
   clearPinAlert();
 }
 
+function setRosterPickerVisible(visible) {
+  if (ui.rosterPicker) ui.rosterPicker.hidden = !visible;
+}
+
+function setPairSearchVisible(visible) {
+  if (ui.pairSearchLabel) ui.pairSearchLabel.hidden = !visible;
+  if (ui.pairSearchField) ui.pairSearchField.hidden = !visible;
+  if (ui.pairSearch) ui.pairSearch.hidden = !visible;
+}
+
+function clearDeskSelection() {
+  selectedId = null;
+  deskView = 'status';
+  ui.selected.hidden = true;
+  if (ui.deskTabs) ui.deskTabs.hidden = true;
+  if (ui.statusView) ui.statusView.hidden = false;
+  ui.pairPanel.hidden = true;
+  setRosterPickerVisible(true);
+  renderResults();
+}
+
 function setDeskView(view) {
   deskView = view === 'pair' ? 'pair' : 'status';
   ui.statusTab?.classList.toggle('active', deskView === 'status');
@@ -291,8 +316,7 @@ function selectEntry(entryId, { openPin = true, resetView = openPin } = {}) {
   const entry = roster.find((item) => item.id === entryId);
   renderResults();
   if (!entry) {
-    ui.selected.hidden = true;
-    if (ui.deskTabs) ui.deskTabs.hidden = true;
+    clearDeskSelection();
     closePinModal();
     return;
   }
@@ -304,11 +328,13 @@ function selectEntry(entryId, { openPin = true, resetView = openPin } = {}) {
     if (ui.deskTabs) ui.deskTabs.hidden = true;
     if (ui.statusView) ui.statusView.hidden = false;
     ui.pairPanel.hidden = true;
+    setRosterPickerVisible(true);
     if (openPin) openPinModal(entry);
     return;
   }
 
   closePinModal();
+  setRosterPickerVisible(false);
   ui.selected.hidden = false;
   ui.selectedAvatar.textContent = initials(entry.name);
   ui.selectedName.textContent = entry.name || 'Player';
@@ -359,15 +385,13 @@ function renderPairPanel(entry) {
 
   if (!entry.playerId) {
     ui.pairStatus.textContent = 'Pairing unlocks after the organizer confirms your player profile.';
-    ui.pairSearch.hidden = true;
+    setPairSearchVisible(false);
     return;
   }
 
-  ui.pairSearch.hidden = false;
-
   if (entry.partnerPlayerId) {
     ui.pairStatus.textContent = `Locked with ${nameForPlayerId(entry.partnerPlayerId)}. Draws keep you on the same side.`;
-    ui.pairSearch.hidden = true;
+    setPairSearchVisible(false);
     const unpair = document.createElement('button');
     unpair.type = 'button';
     unpair.className = 'button button-outline button-wide';
@@ -379,7 +403,7 @@ function renderPairPanel(entry) {
 
   if (entry.partnerRequestToPlayerId) {
     ui.pairStatus.textContent = `Waiting for ${nameForPlayerId(entry.partnerRequestToPlayerId)} to approve. Until then you both stay solo.`;
-    ui.pairSearch.hidden = true;
+    setPairSearchVisible(false);
     const cancel = document.createElement('button');
     cancel.type = 'button';
     cancel.className = 'button button-outline button-wide';
@@ -389,6 +413,7 @@ function renderPairPanel(entry) {
     return;
   }
 
+  setPairSearchVisible(true);
   ui.pairStatus.textContent = 'Pick someone confirmed today. They must approve before the draw locks you together.';
   const search = ui.pairSearch.value.trim().toLowerCase();
   const candidates = roster.filter((item) => {
@@ -441,9 +466,7 @@ async function runAction(action, button) {
     if (action === 'leave') {
       if (!confirm('Leave for today? This frees your confirmed spot.')) return;
       await playerLeaveToday(session.id, entry.id);
-      selectedId = null;
-      ui.selected.hidden = true;
-      if (ui.deskTabs) ui.deskTabs.hidden = true;
+      clearDeskSelection();
       showAlert('You left today’s session.');
     }
   } catch (error) {
@@ -492,6 +515,11 @@ ui.pairSearch.addEventListener('input', () => {
   const mine = myEntry();
   if (mine && selectedId === mine.id) renderPairPanel(mine);
 });
+ui.changeName?.addEventListener('click', () => {
+  closePinModal();
+  clearDeskSelection();
+  queueMicrotask(() => ui.search?.focus());
+});
 ui.statusTab?.addEventListener('click', () => setDeskView('status'));
 ui.pairTab?.addEventListener('click', () => {
   setDeskView('pair');
@@ -501,12 +529,10 @@ ui.pairTab?.addEventListener('click', () => {
 ui.pinForm?.addEventListener('submit', submitPin);
 ui.pinCancel?.addEventListener('click', () => {
   closePinModal();
-  selectedId = null;
-  renderResults();
+  clearDeskSelection();
 });
 ui.pinDialog?.addEventListener('cancel', () => {
-  selectedId = null;
-  renderResults();
+  clearDeskSelection();
 });
 ui.checkIn.addEventListener('click', (event) => runAction('check-in', event.currentTarget));
 ui.sitOut.addEventListener('click', (event) => runAction('sit-out', event.currentTarget));

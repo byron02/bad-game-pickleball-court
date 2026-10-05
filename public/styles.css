@@ -426,6 +426,8 @@ input[type="datetime-local"].input {
 }
 .play-inbound-row p { margin: 0 0 10px; font-size: 14px; }
 .play-results { min-height: 160px; max-height: 280px; }
+.play-roster-picker[hidden] { display: none !important; }
+.play-roster-picker[hidden] + .play-selected { margin-top: 4px; }
 .play-selected {
   margin-top: 18px;
   padding: 16px;
@@ -438,8 +440,21 @@ input[type="datetime-local"].input {
   align-items: center;
   gap: 12px;
 }
+.play-selected-head > div { flex: 1; min-width: 0; }
 .play-selected-head strong { display: block; font-size: 16px; }
 .play-selected-head small { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; }
+.play-change-name {
+  flex: 0 0 auto;
+  border: 0;
+  background: transparent;
+  color: var(--blue);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 4px;
+  cursor: pointer;
+}
+.play-change-name:hover { text-decoration: underline; }
 .play-actions {
   display: grid;
   gap: 8px;
