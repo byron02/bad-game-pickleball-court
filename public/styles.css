@@ -496,7 +496,12 @@ input[type="datetime-local"].input {
   padding-top: 0;
   border-top: 0;
 }
+.play-pair .field-help { margin-bottom: 0; }
+.play-pair-actions { margin-top: 10px; }
+.play-pair-actions:empty { display: none; margin: 0; }
 .play-pair-results { max-height: 280px; margin-top: 8px; min-height: 0; }
+.play-pair-results[hidden],
+.play-pair-results:empty { display: none !important; min-height: 0; margin: 0; border: 0; padding: 0; }
 .play-pair-results:not([hidden]):not(:empty) { min-height: 80px; }
 .play-pair-row {
   display: flex;

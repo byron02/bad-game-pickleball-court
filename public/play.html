@@ -90,13 +90,13 @@
 
         <div id="pairPanel" class="play-view play-pair" hidden>
           <p id="pairStatus" class="field-help">You play as a solo until both of you lock the pair.</p>
-          <label id="pairSearchLabel" class="field-label" for="pairSearch">Request a partner</label>
-          <div id="pairSearchField" class="search-field">
+          <label id="pairSearchLabel" class="field-label" for="pairSearch" hidden>Request a partner</label>
+          <div id="pairSearchField" class="search-field" hidden>
             <span aria-hidden="true">⌕</span>
             <input id="pairSearch" type="search" placeholder="Search a name to pair" autocomplete="off">
           </div>
-          <div id="pairCandidates" class="search-results play-pair-results"></div>
-          <div id="pairActions" class="play-actions"></div>
+          <div id="pairCandidates" class="search-results play-pair-results" hidden></div>
+          <div id="pairActions" class="play-actions play-pair-actions"></div>
         </div>
       </div>
     </section>

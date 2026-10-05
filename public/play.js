@@ -426,12 +426,10 @@ function renderPairPanel(entry) {
   }
 
   if (entry.partnerRequestToPlayerId) {
-    const target = roster.find((item) => item.playerId === entry.partnerRequestToPlayerId);
-    const targetRecord = recordLabel(target);
-    ui.pairStatus.textContent = targetRecord
-      ? `Waiting for ${nameForPlayerId(entry.partnerRequestToPlayerId)} (${targetRecord}) to approve. Until then you both stay solo.`
-      : `Waiting for ${nameForPlayerId(entry.partnerRequestToPlayerId)} to approve. Until then you both stay solo.`;
+    const name = nameForPlayerId(entry.partnerRequestToPlayerId);
+    ui.pairStatus.textContent = `Pending request · ${name}`;
     setPairSearchVisible(false);
+    setPairCandidatesVisible(false);
     const cancel = document.createElement('button');
     cancel.type = 'button';
     cancel.className = 'button button-outline button-wide';
