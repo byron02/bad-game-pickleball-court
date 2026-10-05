@@ -10,7 +10,8 @@
     "deploy": "npm run build && firebase deploy --only hosting,firestore",
     "deploy:hosting": "npm run build && firebase deploy --only hosting",
     "deploy:rules": "node scripts/deploy-firestore-rules.mjs",
-    "bootstrap:organizer": "node scripts/bootstrap-organizer.mjs"
+    "bootstrap:organizer": "node scripts/bootstrap-organizer.mjs",
+    "simulate:draw": "node scripts/simulate-court-draw.mjs"
   },
   "dependencies": {
     "firebase": "^12.19.0"
