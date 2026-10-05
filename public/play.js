@@ -276,9 +276,13 @@ function setDeskView(view) {
   if (ui.statusView) ui.statusView.hidden = deskView !== 'status';
   if (ui.pairPanel) ui.pairPanel.hidden = deskView !== 'pair';
   if (ui.selectedNote) {
-    ui.selectedNote.textContent = deskView === 'pair'
-      ? 'Request or manage your doubles partner here. They must approve before the draw locks you together.'
-      : 'This name is unlocked on this phone. Check in, sit out, or leave from here.';
+    if (deskView === 'pair') {
+      ui.selectedNote.hidden = true;
+      ui.selectedNote.textContent = '';
+    } else {
+      ui.selectedNote.hidden = false;
+      ui.selectedNote.textContent = 'This name is unlocked on this phone. Check in, sit out, or leave from here.';
+    }
   }
 }
 
@@ -310,11 +314,12 @@ function selectEntry(entryId, { openPin = true, resetView = openPin } = {}) {
   ui.selectedName.textContent = entry.name || 'Player';
   ui.selectedMeta.textContent = statusLabel(entry);
   ui.selectedActions.hidden = false;
-  ui.checkIn.hidden = entry.checkedIn && !entry.sittingOut;
+  // Sitting out already means you were checked in — only show Resume, not Check in & resume.
+  ui.checkIn.hidden = entry.checkedIn || entry.sittingOut;
   ui.sitOut.hidden = !entry.checkedIn || entry.sittingOut;
   ui.resume.hidden = !entry.sittingOut;
   ui.leave.hidden = false;
-  ui.checkIn.textContent = entry.sittingOut ? 'Check in & resume' : 'Check in';
+  ui.checkIn.textContent = 'Check in';
   if (ui.deskTabs) ui.deskTabs.hidden = false;
   if (resetView) deskView = 'status';
   setDeskView(deskView);
