@@ -400,7 +400,7 @@ export async function watchAdminDashboard(callback, date = todayManila()) {
   return () => { stopPointer(); stopSession(); stopEntries(); stopPlayers(); };
 }
 
-export async function approveEntry(sessionId, entryId) {
+export async function approveEntry(sessionId, entryId, options = {}) {
   await ensureOrganizer();
   const result = await runTransaction(db, async (transaction) => {
     const sRef = sessionRef(sessionId);
@@ -409,6 +409,11 @@ export async function approveEntry(sessionId, entryId) {
     if (!session.exists() || !session.data().open) throw error('This session is closed.');
     if (!entry.exists() || entry.data().status !== 'pending') throw error('This request is no longer pending.');
     const request = entry.data();
+    const skillLevel = validSkill(
+      Object.prototype.hasOwnProperty.call(options, 'skillLevel')
+        ? options.skillLevel
+        : request.skillLevel,
+    );
     const existingPlayer = request.playerId ? playerRef(request.playerId) : null;
     const freshPlayer = existingPlayer || doc(collection(db, 'players'));
     const player = existingPlayer ? await transaction.get(existingPlayer) : null;
@@ -423,7 +428,7 @@ export async function approveEntry(sessionId, entryId) {
     if (!existingPlayer) {
       const name = validName(request.name);
       const profile = {
-        name, nameLower: name.toLocaleLowerCase(), skillLevel: validSkill(request.skillLevel),
+        name, nameLower: name.toLocaleLowerCase(), skillLevel,
         division: validDivision(request.division),
         photoData: validPhoto(request.photoData), active: true, wins: 0, losses: 0,
         createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
@@ -434,20 +439,22 @@ export async function approveEntry(sessionId, entryId) {
         skillLevel: profile.skillLevel, division: profile.division,
         photoData: profile.photoData,
       });
-    } else if (request.photoData) {
-      const photoData = validPhoto(request.photoData);
-      transaction.update(existingPlayer, { photoData, updatedAt: serverTimestamp() });
+    } else {
+      const photoData = request.photoData ? validPhoto(request.photoData) : player.data().photoData || null;
+      const playerPatch = { skillLevel, updatedAt: serverTimestamp() };
+      if (request.photoData) playerPatch.photoData = photoData;
+      transaction.update(existingPlayer, playerPatch);
       transaction.set(directoryRef(freshPlayer.id), {
         name: player.data().name,
         nameLower: player.data().nameLower || player.data().name.toLocaleLowerCase(),
-        skillLevel: player.data().skillLevel,
+        skillLevel,
         division: player.data().division || 'unspecified',
         photoData,
       }, { merge: true });
     }
     transaction.set(claim, { entryId, createdAt: serverTimestamp() });
     transaction.update(eRef, {
-      playerId: freshPlayer.id, status, approvedAt: serverTimestamp(),
+      playerId: freshPlayer.id, status, skillLevel, approvedAt: serverTimestamp(),
       reviewedAt: serverTimestamp(), updatedAt: serverTimestamp(),
     });
     transaction.update(sRef, {
@@ -455,7 +462,7 @@ export async function approveEntry(sessionId, entryId) {
       waitlistCount: (session.data().waitlistCount || 0) + (confirmed ? 0 : 1),
       updatedAt: serverTimestamp(),
     });
-    return { status, playerId: freshPlayer.id };
+    return { status, playerId: freshPlayer.id, skillLevel };
   });
   return result;
 }

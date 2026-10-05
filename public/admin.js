@@ -26,6 +26,8 @@ let players = [];
 let selectedDate = null;
 let unsubscribeDashboard = null;
 let activeShareLink = '';
+const pendingSkillByEntry = new Map();
+const SKILL_LEVELS = ['beginner', 'intermediate', 'advanced'];
 
 function showAlert(message, type = 'error') {
   ui.alert.textContent = message;
@@ -103,6 +105,28 @@ function recordLabel(player) {
   return `${wins} ${wins === 1 ? 'win' : 'wins'} · ${losses} ${losses === 1 ? 'loss' : 'losses'}`;
 }
 
+function skillSelect(entryId, current) {
+  const label = node('label', 'entry-skill');
+  label.append(node('span', '', 'Skill level'));
+  const select = document.createElement('select');
+  select.className = 'input entry-skill-select';
+  select.dataset.skillFor = entryId;
+  select.setAttribute('aria-label', 'Skill level');
+  const selected = pendingSkillByEntry.get(entryId) || current || 'beginner';
+  for (const level of SKILL_LEVELS) {
+    const option = document.createElement('option');
+    option.value = level;
+    option.textContent = level.charAt(0).toUpperCase() + level.slice(1);
+    if (level === selected) option.selected = true;
+    select.append(option);
+  }
+  select.addEventListener('change', () => {
+    pendingSkillByEntry.set(entryId, select.value);
+  });
+  label.append(select);
+  return label;
+}
+
 function renderEntry(entry, kind) {
   const row = node('article', 'entry-row');
   row.append(avatar(entry));
@@ -113,10 +137,17 @@ function renderEntry(entry, kind) {
   if (kind === 'confirmed') top.append(statusBadge(entry.checkedIn ? 'Checked in' : 'Reserved', entry.checkedIn ? 'green' : 'blue'));
   if (kind === 'waitlist') top.append(statusBadge('Waitlist', 'amber'));
   body.append(top);
-  const details = [entry.skillLevel || 'Skill not set'];
-  if (entry.division && entry.division !== 'unspecified') details.push(entry.division);
-  if (kind === 'pending') details.push('Organizer review required');
-  body.append(node('div', 'entry-meta', details.join(' · ')));
+  if (kind === 'pending') {
+    body.append(skillSelect(entry.id, entry.skillLevel));
+    const details = [];
+    if (entry.division && entry.division !== 'unspecified') details.push(entry.division);
+    details.push('Organizer review required');
+    body.append(node('div', 'entry-meta', details.join(' · ')));
+  } else {
+    const details = [entry.skillLevel || 'Skill not set'];
+    if (entry.division && entry.division !== 'unspecified') details.push(entry.division);
+    body.append(node('div', 'entry-meta', details.join(' · ')));
+  }
   const actions = node('div', 'entry-actions');
   if (kind === 'pending') {
     actions.append(actionButton('Approve', 'approve', entry.id, 'button-primary'));
@@ -133,12 +164,19 @@ function renderEntry(entry, kind) {
 }
 
 function renderList(container, items, kind, emptyMessage) {
+  const active = document.activeElement;
+  const focusedSkillId = kind === 'pending' && active?.matches?.('select[data-skill-for]')
+    ? active.dataset.skillFor
+    : null;
   container.replaceChildren();
   if (!items.length) {
     container.append(node('p', 'panel-empty', emptyMessage));
     return;
   }
   for (const entry of items) container.append(renderEntry(entry, kind));
+  if (focusedSkillId) {
+    container.querySelector(`select[data-skill-for="${CSS.escape(focusedSkillId)}"]`)?.focus();
+  }
 }
 
 function renderDirectory() {
@@ -183,6 +221,10 @@ function renderDashboard(data) {
   const pending = entries.filter((entry) => entry.status === 'pending');
   const confirmed = entries.filter((entry) => entry.status === 'confirmed');
   const waitlist = entries.filter((entry) => ['waitlist', 'waitlisted'].includes(entry.status));
+  const pendingIds = new Set(pending.map((entry) => entry.id));
+  for (const entryId of [...pendingSkillByEntry.keys()]) {
+    if (!pendingIds.has(entryId)) pendingSkillByEntry.delete(entryId);
+  }
   const confirmedCount = Number(session.confirmedCount ?? confirmed.length);
   const checkedInCount = Number(session.checkedInCount ?? confirmed.filter((entry) => entry.checkedIn).length);
   const pendingCount = Number(session.pendingCount ?? pending.length);
@@ -260,7 +302,14 @@ async function runEntryAction(action, entryId, button) {
   }
   button.disabled = true;
   try {
-    await fn(session.id, entryId);
+    if (action === 'approve') {
+      const skillSelect = button.closest('.entry-row')?.querySelector('select[data-skill-for]');
+      const skillLevel = skillSelect?.value || pendingSkillByEntry.get(entryId);
+      await approveEntry(session.id, entryId, skillLevel ? { skillLevel } : {});
+      pendingSkillByEntry.delete(entryId);
+    } else {
+      await fn(session.id, entryId);
+    }
     await refreshDashboard();
     showAlert('Session updated.', 'success');
   } catch (error) {
