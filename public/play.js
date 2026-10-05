@@ -57,14 +57,19 @@ let selectedId = null;
 let board = null;
 let stopRoster = null;
 let stopBoard = null;
+let alertTimer = null;
 
 function showAlert(message) {
   ui.alert.textContent = message;
   ui.alert.hidden = false;
   ui.alert.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  clearTimeout(alertTimer);
+  alertTimer = setTimeout(() => clearAlert(), 4000);
 }
 
 function clearAlert() {
+  clearTimeout(alertTimer);
+  alertTimer = null;
   ui.alert.hidden = true;
   ui.alert.textContent = '';
 }
