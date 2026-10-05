@@ -259,7 +259,7 @@
           <div>
             <div class="eyebrow">Desk access</div>
             <h1>Settings</h1>
-            <p>See who can open the organizer desk and invite another email.</p>
+            <p>See who can open the organizer desk and add another email.</p>
           </div>
         </section>
 
@@ -278,16 +278,16 @@
           <div class="panel-head">
             <div>
               <span class="eyebrow">Organizers</span>
-              <h2>Invite by email</h2>
-              <p>Add a Google account email. They get access the next time they sign in on /admin.</p>
+              <h2>Add by email</h2>
+              <p>Enter a Google account email. They can open /admin with that account right away.</p>
             </div>
           </div>
-          <form id="organizerInviteForm">
-            <label class="field-label" for="organizerInviteEmail">Organizer email</label>
-            <input id="organizerInviteEmail" name="email" class="input" type="email" autocomplete="email" required placeholder="name@gmail.com">
-            <button class="button button-primary button-wide" type="submit">Invite organizer</button>
+          <form id="organizerAddForm">
+            <label class="field-label" for="organizerAddEmail">Organizer email</label>
+            <input id="organizerAddEmail" name="email" class="input" type="email" autocomplete="email" required placeholder="name@gmail.com">
+            <button class="button button-primary button-wide" type="submit">Add organizer</button>
           </form>
-          <p class="field-help">They must use that exact Google account. You can cancel a pending invite anytime.</p>
+          <p class="field-help">Use the exact Google account email they sign in with.</p>
         </section>
 
         <section class="panel">
@@ -299,17 +299,6 @@
             </div>
           </div>
           <div id="organizerList" class="entry-list organizer-access-list" aria-live="polite"></div>
-        </section>
-
-        <section class="panel">
-          <div class="panel-head">
-            <div>
-              <span class="eyebrow">Waiting to join</span>
-              <h2>Pending invites</h2>
-              <p>These emails can claim organizer access on their next sign-in.</p>
-            </div>
-          </div>
-          <div id="organizerInviteList" class="entry-list organizer-access-list" aria-live="polite"></div>
         </section>
       </section>
 

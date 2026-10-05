@@ -150,43 +150,38 @@ test('closed signup links reject new requests', { skip: !enabled }, async () => 
   await assertFails(setDoc(doc(db, 'sessions', sessionId, 'entries', 'late-player'), request('late-player')));
 });
 
-test('organizer can invite by email and invitee can claim access', { skip: !enabled }, async () => {
+test('organizer can add another email and that account is authorized immediately', { skip: !enabled }, async () => {
   const google = { email: 'owner@example.com', firebase: { sign_in_provider: 'google.com' } };
-  const invitee = { email: 'helper@example.com', firebase: { sign_in_provider: 'google.com' } };
+  const helper = { email: 'helper@example.com', firebase: { sign_in_provider: 'google.com' } };
   await env.withSecurityRulesDisabled(async (context) => {
     await setDoc(doc(context.firestore(), 'organizers', 'owner'), {
       active: true, email: 'owner@example.com',
     });
   });
   const ownerDb = env.authenticatedContext('owner', google).firestore();
-  await assertSucceeds(setDoc(doc(ownerDb, 'organizerInvites', 'helper@example.com'), {
+  await assertSucceeds(setDoc(doc(ownerDb, 'organizerEmails', 'helper@example.com'), {
     email: 'helper@example.com',
     active: true,
-    invitedByUid: 'owner',
-    invitedByEmail: 'owner@example.com',
-    createdAt: new Date(),
-    claimedUid: null,
-    claimedAt: null,
+    addedByUid: 'owner',
+    addedByEmail: 'owner@example.com',
   }));
-  const inviteeDb = env.authenticatedContext('helper', invitee).firestore();
-  await assertSucceeds(setDoc(doc(inviteeDb, 'organizers', 'helper'), {
-    active: true, email: 'helper@example.com',
-  }));
-  await assertSucceeds(updateDoc(doc(inviteeDb, 'organizerInvites', 'helper@example.com'), {
-    active: false, claimedUid: 'helper', claimedAt: new Date(),
-  }));
-  await assertFails(setDoc(doc(inviteeDb, 'organizers', 'stranger'), {
+  const helperDb = env.authenticatedContext('helper', helper).firestore();
+  await assertSucceeds(updateDoc(doc(helperDb, 'sessions', sessionId), { capacity: 40 }));
+  await assertSucceeds(setDoc(doc(helperDb, 'organizers', 'helper'), {
     active: true, email: 'helper@example.com',
   }));
 });
 
-test('uninvited users still cannot grant themselves organizer access', { skip: !enabled }, async () => {
+test('users not on the organizer email list cannot add themselves', { skip: !enabled }, async () => {
   const google = { email: 'outsider@example.com', firebase: { sign_in_provider: 'google.com' } };
   const db = env.authenticatedContext('outsider', google).firestore();
   await assertFails(setDoc(doc(db, 'organizers', 'outsider'), {
     active: true, email: 'outsider@example.com',
   }));
-  await assertFails(setDoc(doc(db, 'organizerInvites', 'friend@example.com'), {
-    email: 'friend@example.com', active: true, invitedByUid: 'outsider',
+  await assertFails(setDoc(doc(db, 'organizerEmails', 'outsider@example.com'), {
+    email: 'outsider@example.com', active: true,
+  }));
+  await assertFails(setDoc(doc(db, 'organizerEmails', 'friend@example.com'), {
+    email: 'friend@example.com', active: true,
   }));
 });

@@ -68,11 +68,14 @@ function lockRef(sessionId, playerId) {
 async function ensureOrganizer() {
   const user = await getCurrentUser();
   if (!user || user.isAnonymous) throw error('Organizer sign-in is required.', 'auth-required');
-  const permit = await getDoc(doc(db, 'organizers', user.uid));
-  if (!permit.exists() || permit.data().active !== true) {
-    throw error('This account is not an approved organizer.', 'permission-denied');
+  const uidPermit = await getDoc(doc(db, 'organizers', user.uid));
+  if (uidPermit.exists() && uidPermit.data().active === true) return user;
+  const email = String(user.email || '').trim().toLowerCase();
+  if (email) {
+    const emailPermit = await getDoc(doc(db, 'organizerEmails', email));
+    if (emailPermit.exists() && emailPermit.data().active === true) return user;
   }
-  return user;
+  throw error('This account is not an approved organizer.', 'permission-denied');
 }
 
 function normalizedCourt(snapshot) {

@@ -13,8 +13,13 @@ service cloud.firestore {
     function organizer() {
       return signedIn() &&
         request.auth.token.firebase.sign_in_provider != 'anonymous' &&
-        exists(/databases/$(database)/documents/organizers/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/organizers/$(request.auth.uid)).data.active == true;
+        (
+          (exists(/databases/$(database)/documents/organizers/$(request.auth.uid)) &&
+            get(/databases/$(database)/documents/organizers/$(request.auth.uid)).data.active == true) ||
+          (authEmail().size() > 0 &&
+            exists(/databases/$(database)/documents/organizerEmails/$(authEmail())) &&
+            get(/databases/$(database)/documents/organizerEmails/$(authEmail())).data.active == true)
+        );
     }
 
     function authEmail() {
@@ -102,50 +107,33 @@ service cloud.firestore {
     }
 
     match /organizers/{uid} {
-      // First organizer still comes from Console/Admin SDK. Extra organizers are
-      // invited by email; invitees may claim their own document once.
+      // Legacy UID docs (bootstrap / synced accounts). Email access is managed in
+      // organizerEmails; signed-in users may sync their own UID doc when listed.
       allow get: if signedIn() && (request.auth.uid == uid || organizer());
       allow list: if organizer();
-      allow create: if signedIn() &&
+      allow create, update: if signedIn() &&
         request.auth.uid == uid &&
         authEmail().size() > 0 &&
         request.resource.data.active == true &&
         validOrganizerEmail(request.resource.data.email) &&
         request.resource.data.email == authEmail() &&
-        exists(/databases/$(database)/documents/organizerInvites/$(authEmail())) &&
-        get(/databases/$(database)/documents/organizerInvites/$(authEmail())).data.active == true;
-      allow update: if (organizer() &&
-          request.resource.data.active is bool &&
-          (!request.resource.data.keys().hasAny(['email']) ||
-            request.resource.data.email == null ||
-            validOrganizerEmail(request.resource.data.email))) ||
-        (signedIn() &&
-          request.auth.uid == uid &&
-          authEmail().size() > 0 &&
-          request.resource.data.active == true &&
-          validOrganizerEmail(request.resource.data.email) &&
-          request.resource.data.email == authEmail() &&
-          exists(/databases/$(database)/documents/organizerInvites/$(authEmail())) &&
-          get(/databases/$(database)/documents/organizerInvites/$(authEmail())).data.active == true);
+        exists(/databases/$(database)/documents/organizerEmails/$(authEmail())) &&
+        get(/databases/$(database)/documents/organizerEmails/$(authEmail())).data.active == true;
+      allow update: if organizer() &&
+        request.resource.data.active is bool &&
+        (!request.resource.data.keys().hasAny(['email']) ||
+          request.resource.data.email == null ||
+          validOrganizerEmail(request.resource.data.email));
       allow delete: if false;
     }
 
-    match /organizerInvites/{email} {
-      allow get: if organizer() ||
-        (signedIn() && authEmail() == email);
+    match /organizerEmails/{email} {
+      allow get: if organizer() || (signedIn() && authEmail() == email);
       allow list: if organizer();
-      allow create: if organizer() &&
+      allow create, update: if organizer() &&
         validOrganizerEmail(email) &&
         request.resource.data.email == email &&
-        request.resource.data.active == true &&
-        request.resource.data.invitedByUid == request.auth.uid;
-      allow update: if organizer() ||
-        (signedIn() &&
-          authEmail() == email &&
-          resource.data.active == true &&
-          request.resource.data.active == false &&
-          request.resource.data.claimedUid == request.auth.uid &&
-          request.resource.data.email == email);
+        request.resource.data.active is bool;
       allow delete: if organizer();
     }
 

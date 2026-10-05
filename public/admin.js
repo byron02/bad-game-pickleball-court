@@ -2,8 +2,7 @@ import {
   getAdminDashboard, watchAdminDashboard, signInOrganizerWithGoogle,
   signOutOrganizer, approveEntry, rejectEntry, removeEntry, checkInEntry, checkOutEntry,
   reservePlayer, updatePlayer, updateSession, resetSession, setEntryPartner,
-  createAndReservePlayer, getCurrentUser, listOrganizers, listOrganizerInvites,
-  inviteOrganizer, cancelOrganizerInvite, revokeOrganizer,
+  createAndReservePlayer, getCurrentUser, listOrganizers, addOrganizer, removeOrganizer,
 } from '../src/firebaseStore.js';
 import { initCourtsUI } from './courts-ui.js';
 
@@ -29,9 +28,8 @@ const ui = {
   copyLink: $('copyLinkButton'), copyLinkSecondary: $('copyLinkSecondary'), refresh: $('refreshButton'),
   reset: $('resetButton'), resetDialog: $('resetDialog'), resetForm: $('resetForm'), resetConfirm: $('resetConfirm'), cancelReset: $('cancelReset'),
   navPendingPill: $('navPendingPill'), mobilePendingPill: $('mobilePendingPill'),
-  organizerAccountEmail: $('organizerAccountEmail'), organizerInviteForm: $('organizerInviteForm'),
-  organizerInviteEmail: $('organizerInviteEmail'), organizerList: $('organizerList'),
-  organizerInviteList: $('organizerInviteList'),
+  organizerAccountEmail: $('organizerAccountEmail'), organizerAddForm: $('organizerAddForm'),
+  organizerAddEmail: $('organizerAddEmail'), organizerList: $('organizerList'),
 };
 
 let session = null;
@@ -296,13 +294,13 @@ function showView(name, { updateHash = true } = {}) {
 }
 
 async function refreshOrganizerSettings() {
-  if (!ui.organizerList || !ui.organizerInviteList) return;
-  const [user, organizers, invites] = await Promise.all([
+  if (!ui.organizerList) return;
+  const [user, organizers] = await Promise.all([
     getCurrentUser(),
     listOrganizers(),
-    listOrganizerInvites(),
   ]);
   currentOrganizerUid = user?.uid || null;
+  const currentEmail = user?.email ? String(user.email).trim().toLowerCase() : null;
   if (ui.organizerAccountEmail) {
     ui.organizerAccountEmail.textContent = user?.email || 'Signed in without an email on this account.';
   }
@@ -310,46 +308,26 @@ async function refreshOrganizerSettings() {
   ui.organizerList.replaceChildren();
   if (!active.length) {
     ui.organizerList.append(node('p', 'panel-empty', 'No active organizers found.'));
-  } else {
-    for (const item of active) {
-      const row = node('article', 'entry-row');
-      const body = node('div', 'entry-body');
-      const top = node('div', 'entry-top');
-      top.append(node('strong', '', item.email || `UID ${item.uid.slice(0, 8)}…`));
-      if (item.uid === currentOrganizerUid) top.append(statusBadge('You', 'green'));
-      else top.append(statusBadge('Organizer', 'blue'));
-      body.append(top);
-      if (!item.email) body.append(node('p', 'entry-meta', `Account id ${item.uid}`));
-      row.append(body);
-      const actions = node('div', 'entry-actions');
-      if (item.uid !== currentOrganizerUid) {
-        actions.append(actionButton('Remove', 'revoke-organizer', item.uid, 'button-danger-outline'));
-      }
-      row.append(actions);
-      ui.organizerList.append(row);
-    }
+    return;
   }
-
-  ui.organizerInviteList.replaceChildren();
-  if (!invites.length) {
-    ui.organizerInviteList.append(node('p', 'panel-empty', 'No pending invites.'));
-  } else {
-    for (const item of invites) {
-      const row = node('article', 'entry-row');
-      const body = node('div', 'entry-body');
-      const top = node('div', 'entry-top');
-      top.append(node('strong', '', item.email));
-      top.append(statusBadge('Pending', 'amber'));
-      body.append(top);
-      if (item.invitedByEmail) {
-        body.append(node('p', 'entry-meta', `Invited by ${item.invitedByEmail}`));
-      }
-      row.append(body);
-      const actions = node('div', 'entry-actions');
-      actions.append(actionButton('Cancel invite', 'cancel-invite', item.email, 'button-danger-outline'));
-      row.append(actions);
-      ui.organizerInviteList.append(row);
+  for (const item of active) {
+    const row = node('article', 'entry-row');
+    const body = node('div', 'entry-body');
+    const top = node('div', 'entry-top');
+    const label = item.email || (item.uid ? `UID ${item.uid.slice(0, 8)}…` : 'Unknown');
+    top.append(node('strong', '', label));
+    const isYou = (item.email && item.email === currentEmail)
+      || (item.uid && item.uid === currentOrganizerUid);
+    top.append(statusBadge(isYou ? 'You' : 'Organizer', isYou ? 'green' : 'blue'));
+    body.append(top);
+    if (!item.email && item.uid) body.append(node('p', 'entry-meta', `Account id ${item.uid}`));
+    row.append(body);
+    const actions = node('div', 'entry-actions');
+    if (!isYou) {
+      actions.append(actionButton('Remove', 'remove-organizer', item.email || item.uid, 'button-danger-outline'));
     }
+    row.append(actions);
+    ui.organizerList.append(row);
   }
 }
 
@@ -1036,16 +1014,16 @@ ui.signOut.addEventListener('click', async () => {
   }
 });
 
-ui.organizerInviteForm?.addEventListener('submit', async (event) => {
+ui.organizerAddForm?.addEventListener('submit', async (event) => {
   event.preventDefault();
-  if (!ui.organizerInviteForm.reportValidity()) return;
-  const button = ui.organizerInviteForm.querySelector('[type="submit"]');
+  if (!ui.organizerAddForm.reportValidity()) return;
+  const button = ui.organizerAddForm.querySelector('[type="submit"]');
   button.disabled = true;
   try {
-    const { email } = await inviteOrganizer(ui.organizerInviteEmail.value);
-    ui.organizerInviteForm.reset();
+    const { email } = await addOrganizer(ui.organizerAddEmail.value);
+    ui.organizerAddForm.reset();
     await refreshOrganizerSettings();
-    showAlert(`Invite sent for ${email}. They can sign in on /admin with that Google account.`, 'success');
+    showAlert(`${email} can sign in on /admin now.`, 'success');
   } catch (error) {
     showAlert(friendlyError(error));
   } finally {
@@ -1053,36 +1031,22 @@ ui.organizerInviteForm?.addEventListener('submit', async (event) => {
   }
 });
 
-async function handleOrganizerAccessAction(action, id, button) {
+ui.organizerList?.addEventListener('click', async (event) => {
+  const button = event.target.closest('button[data-action="remove-organizer"]');
+  if (!button) return;
+  const label = button.closest('.entry-row')?.querySelector('strong')?.textContent || 'this organizer';
+  if (!confirm(`Remove organizer access for ${label}?`)) return;
   button.disabled = true;
   try {
-    if (action === 'revoke-organizer') {
-      const label = button.closest('.entry-row')?.querySelector('strong')?.textContent || 'this organizer';
-      if (!confirm(`Remove organizer access for ${label}?`)) return;
-      await revokeOrganizer(id);
-      await refreshOrganizerSettings();
-      showAlert('Organizer access removed.', 'success');
-      return;
-    }
-    if (action === 'cancel-invite') {
-      await cancelOrganizerInvite(id);
-      await refreshOrganizerSettings();
-      showAlert('Invite canceled.', 'success');
-    }
+    await removeOrganizer(button.dataset.id);
+    await refreshOrganizerSettings();
+    showAlert('Organizer access removed.', 'success');
   } catch (error) {
     showAlert(friendlyError(error));
   } finally {
     button.disabled = false;
   }
-}
-
-for (const list of [ui.organizerList, ui.organizerInviteList]) {
-  list?.addEventListener('click', (event) => {
-    const button = event.target.closest('button[data-action]');
-    if (!button) return;
-    handleOrganizerAccessAction(button.dataset.action, button.dataset.id, button);
-  });
-}
+});
 
 document.querySelector('.web-nav')?.addEventListener('click', (event) => {
   const link = event.target.closest('a[data-view]');
