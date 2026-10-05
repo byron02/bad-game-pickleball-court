@@ -5,6 +5,7 @@ import {
   recordGameResult,
   validateCourtConfig,
   validateLineup,
+  courtPoolSummary,
 } from '../src/domain/courts.js';
 
 const player = (id, skill, gender, extra = {}) => ({
@@ -36,6 +37,10 @@ test('per-court skill rules allow advanced-only beside beginner/intermediate cou
     lineup: { sideA: ['a1', 'b1'], sideB: ['a3', 'a4'] },
     players,
   }).valid, false);
+  assert.deepEqual(courtPoolSummary({
+    players,
+    activeGames: [{ status: 'active', lineup: { sideA: ['a1', 'a2'], sideB: ['a3', 'a4'] } }],
+  }), { waiting: 4, onCourt: 4, checkedIn: 8 });
 });
 
 test('women, men, and mixed divisions constrain every team independently', () => {
