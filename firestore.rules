@@ -116,10 +116,14 @@ service cloud.firestore {
 
     // Public search exposes a small approved directory. The full player
     // profile, including lifetime match statistics, stays organizer-managed.
+    // Organizers may also read it so an /admin Google session on /join can
+    // still search profiles (writes stay organizer-only; public signup still
+    // requires anonymous auth).
     match /playerDirectory/{playerId} {
-      allow get: if anonymousPlayer();
-      allow list: if anonymousPlayer() && request.query.limit != null &&
-        request.query.limit <= 20;
+      allow get: if organizer() || anonymousPlayer();
+      allow list: if organizer() ||
+        (anonymousPlayer() && request.query.limit != null &&
+          request.query.limit <= 20);
       allow create, update, delete: if organizer();
     }
 

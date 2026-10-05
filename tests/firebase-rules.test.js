@@ -135,6 +135,14 @@ test('public search reads only the approved directory; full profiles and session
     await assertFails(getDocs(collection(db, 'sessions')));
     await assertFails(getDocs(collection(db, 'sessions', sessionId, 'entries')));
     await assertFails(getDoc(doc(db, 'courts', 'court-1')));
+
+    const organizerDb = env.authenticatedContext('organizer', password).firestore();
+    const organizerFound = await assertSucceeds(getDocs(query(
+      collection(organizerDb, 'playerDirectory'), orderBy('nameLower'),
+      startAt('an'), endAt('an\uf8ff'), limit(20),
+    )));
+    assert.equal(organizerFound.docs.length, 1);
+    await assertSucceeds(getDoc(doc(organizerDb, 'playerDirectory', 'ana')));
   });
 
 test('closed signup links reject new requests', { skip: !enabled }, async () => {
