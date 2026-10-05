@@ -198,24 +198,57 @@ h1, h2, h3, p { margin: 0; }
   max-height: none;
   overflow: visible;
   grid-template-columns: 1fr;
+  gap: 6px;
 }
 .players-desk .roster-full-list[data-layout="list"] .entry-row {
   align-items: center;
-  padding: 10px 12px;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
 }
-.players-desk .roster-full-list[data-layout="list"] .entry-actions {
-  margin-top: 0;
+.players-desk .roster-full-list[data-layout="list"] .avatar {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
 }
 .players-desk .roster-full-list[data-layout="list"] .entry-body {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "top actions"
+    "meta actions";
+  column-gap: 12px;
+  row-gap: 1px;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
+  min-width: 0;
 }
-.players-desk .roster-full-list[data-layout="list"] .entry-top,
-.players-desk .roster-full-list[data-layout="list"] .entry-meta {
+.players-desk .roster-full-list[data-layout="list"] .entry-top {
+  grid-area: top;
   margin: 0;
+  min-width: 0;
+}
+.players-desk .roster-full-list[data-layout="list"] .entry-top strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.players-desk .roster-full-list[data-layout="list"] .entry-meta {
+  grid-area: meta;
+  margin: 0;
+  text-align: left;
+  line-height: 1.25;
+}
+.players-desk .roster-full-list[data-layout="list"] .entry-actions {
+  grid-area: actions;
+  margin: 0;
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+  gap: 5px;
+}
+.players-desk .roster-full-list[data-layout="list"] .entry-actions .button {
+  min-height: 32px;
+  padding: 5px 10px;
+  font-size: 11px;
 }
 .fill-panel { margin-top: 0; }
 .players-desk .fill-panel { position: static; }
@@ -477,6 +510,17 @@ h1, h2, h3, p { margin: 0; }
   .card-heading h2 { font-size: 23px; }
   .tab { font-size: 11px; }
   .panel { padding: 16px; }
+  .players-desk .roster-full-list[data-layout="list"] .entry-body {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "top"
+      "meta"
+      "actions";
+  }
+  .players-desk .roster-full-list[data-layout="list"] .entry-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
   .entry-row { flex-wrap: wrap; }
   .entry-row .avatar { flex-basis: 34px; width: 34px; height: 34px; }
   .metric { min-height: 96px; }
