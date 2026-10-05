@@ -15,6 +15,7 @@ const ui = {
   dateLabel: $('adminDateLabel'), checkedIn: $('checkedInMetric'), pending: $('pendingMetric'), waitlist: $('waitlistMetric'), open: $('openMetric'),
   pendingCount: $('pendingCountLabel'), pendingList: $('pendingList'), confirmedList: $('confirmedList'),
   waitlistCount: $('waitlistCountLabel'), waitlistList: $('waitlistList'),
+  rosterSearch: $('rosterSearch'), rosterFillList: $('rosterFillList'), fillSpotsNote: $('fillSpotsNote'),
   directorySearch: $('directorySearch'), directoryList: $('directoryList'), shareLink: $('shareLinkText'),
   copyLink: $('copyLinkButton'), copyLinkSecondary: $('copyLinkSecondary'), refresh: $('refreshButton'),
   reset: $('resetButton'), resetDialog: $('resetDialog'), resetForm: $('resetForm'), resetConfirm: $('resetConfirm'), cancelReset: $('cancelReset'),
@@ -206,14 +207,59 @@ function renderList(container, items, kind, emptyMessage) {
   }
 }
 
+function rosteredPlayerIds() {
+  return new Set(entries.filter((entry) =>
+    ['pending', 'confirmed', 'waitlisted'].includes(entry.status)).map((entry) => entry.playerId));
+}
+
+function renderFillList() {
+  if (!ui.rosterFillList) return;
+  const search = ui.rosterSearch?.value.trim().toLowerCase() || '';
+  const openSpots = Math.max(0, Number(session?.spotsLeft ?? 0));
+  const activePlayerIds = rosteredPlayerIds();
+  const available = players.filter((player) => {
+    if (!player.active || activePlayerIds.has(player.id)) return false;
+    const text = `${player.name || ''} ${player.skillLevel || ''} ${player.division || ''}`.toLowerCase();
+    return text.includes(search);
+  }).slice(0, 40);
+  if (ui.fillSpotsNote) {
+    ui.fillSpotsNote.textContent = openSpots > 0
+      ? `${openSpots} open confirmed ${openSpots === 1 ? 'spot' : 'spots'}. Search someone who is not reserved yet, then add them or add and check in.`
+      : 'Confirmed spots are full. You can still reserve players to the waitlist.';
+  }
+  ui.rosterFillList.replaceChildren();
+  if (!available.length) {
+    ui.rosterFillList.append(node('p', 'panel-empty',
+      players.length
+        ? (search ? 'No matching free players.' : 'Every approved player is already on today’s list.')
+        : 'No approved players in the directory yet.'));
+    return;
+  }
+  for (const player of available) {
+    const row = node('div', 'directory-row');
+    row.append(avatar(player));
+    const info = node('div', 'person-info');
+    info.append(node('strong', '', player.name || 'Unnamed player'));
+    info.append(node('small', '', [player.skillLevel, player.division && player.division !== 'unspecified' ? player.division : ''].filter(Boolean).join(' · ') || 'Player'));
+    info.append(node('small', 'player-record', recordLabel(player)));
+    row.append(info);
+    if (openSpots > 0) {
+      row.append(actionButton('Add & check in', 'reserve-checkin', player.id, 'button-primary'));
+      row.append(actionButton('Reserve', 'reserve', player.id, 'button-outline'));
+    } else {
+      row.append(actionButton('Waitlist', 'reserve', player.id, 'button-primary'));
+    }
+    ui.rosterFillList.append(row);
+  }
+}
+
 function renderDirectory() {
   const search = ui.directorySearch.value.trim().toLowerCase();
   const available = players.filter((player) => {
     const text = `${player.name || ''} ${player.skillLevel || ''} ${player.division || ''}`.toLowerCase();
     return player.active && text.includes(search);
   }).slice(0, 40);
-  const activePlayerIds = new Set(entries.filter((entry) =>
-    ['pending', 'confirmed', 'waitlisted'].includes(entry.status)).map((entry) => entry.playerId));
+  const activePlayerIds = rosteredPlayerIds();
   ui.directoryList.replaceChildren();
   if (!available.length) {
     ui.directoryList.append(node('p', 'panel-empty', players.length ? 'No matching player found.' : 'No approved players in the directory yet.'));
@@ -273,6 +319,7 @@ function renderDashboard(data) {
   renderList(ui.pendingList, pending, 'pending', 'No signup requests to review.');
   renderList(ui.confirmedList, confirmed, 'confirmed', 'No reserved players yet. Share the signup link or add a known player.');
   renderList(ui.waitlistList, waitlist, 'waitlist', 'No players on the waitlist.');
+  renderFillList();
   renderDirectory();
 
   activeShareLink = session.signupUrl || `${location.origin}/join?token=${encodeURIComponent(session.shareToken || session.id)}`;
@@ -375,6 +422,24 @@ ui.directoryList.addEventListener('click', async (event) => {
     await reservePlayer(session.id, button.dataset.id);
     await refreshDashboard();
     showAlert('Player added to today’s roster.', 'success');
+  } catch (error) {
+    showAlert(friendlyError(error));
+    button.disabled = false;
+  }
+});
+ui.rosterSearch?.addEventListener('input', renderFillList);
+ui.rosterFillList?.addEventListener('click', async (event) => {
+  const button = event.target.closest('button[data-action]');
+  if (!button || !session) return;
+  if (!['reserve', 'reserve-checkin'].includes(button.dataset.action)) return;
+  button.disabled = true;
+  try {
+    const checkIn = button.dataset.action === 'reserve-checkin';
+    const result = await reservePlayer(session.id, button.dataset.id, { checkIn });
+    await refreshDashboard();
+    if (result.entry?.checkedIn) showAlert('Player added and checked in.', 'success');
+    else if (result.entry?.status === 'waitlisted') showAlert('Player added to the waitlist.', 'success');
+    else showAlert('Player reserved for today.', 'success');
   } catch (error) {
     showAlert(friendlyError(error));
     button.disabled = false;

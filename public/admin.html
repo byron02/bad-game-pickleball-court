@@ -127,13 +127,13 @@
           <div>
             <div class="eyebrow">Daily roster</div>
             <h1>Players</h1>
-            <p>Check in arrivals and manage the waitlist.</p>
+            <p>Check in arrivals, or search the full list to fill an open spot.</p>
           </div>
         </section>
         <section class="panel">
           <div class="panel-head">
             <div>
-              <span class="eyebrow">Reserved</span>
+              <span class="eyebrow">Reserved today</span>
               <h2>Confirmed players</h2>
               <p>A confirmed reservation holds its spot until removed or reset.</p>
             </div>
@@ -141,6 +141,18 @@
           <div id="confirmedList" class="entry-list" aria-live="polite"></div>
           <div class="list-subhead"><h3>Waitlist</h3><span id="waitlistCountLabel" class="count-pill">0</span></div>
           <div id="waitlistList" class="entry-list"></div>
+        </section>
+        <section class="panel fill-panel">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">Main player list</span>
+              <h2>Fill an open spot</h2>
+              <p id="fillSpotsNote">Search players who are not reserved yet. Add them to today, or add and check in when a spot is open.</p>
+            </div>
+          </div>
+          <label class="field-label" for="rosterSearch">Search all players</label>
+          <div class="search-field"><span aria-hidden="true">⌕</span><input id="rosterSearch" type="search" placeholder="Name or skill level" autocomplete="off"></div>
+          <div id="rosterFillList" class="directory-list fill-list" aria-live="polite"></div>
         </section>
       </section>
 

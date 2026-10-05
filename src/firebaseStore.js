@@ -27,6 +27,7 @@ import {
   startAt,
   endAt,
   where,
+  increment,
 } from 'firebase/firestore';
 import { firebaseConfig } from './firebaseConfig.js';
 
@@ -548,12 +549,13 @@ async function closeEntry(sessionId, entryId, status) {
       reviewedAt: serverTimestamp(), updatedAt: serverTimestamp(),
     });
     if (existingClaim?.exists() && existingClaim.data().entryId === entryId) transaction.delete(claim);
-    transaction.update(sRef, {
+    const sessionPatch = {
       confirmedCount: session.data().confirmedCount - (wasConfirmed ? 1 : 0),
-      checkedInCount: (session.data().checkedInCount || 0) - (wasConfirmed && prior.checkedIn ? 1 : 0),
       waitlistCount: (session.data().waitlistCount || 0) - (wasWaitlisted ? 1 : 0),
       updatedAt: serverTimestamp(),
-    });
+    };
+    if (wasConfirmed && prior.checkedIn) sessionPatch.checkedInCount = increment(-1);
+    transaction.update(sRef, sessionPatch);
     return wasConfirmed;
   });
   if (freed) await promoteOldest(sessionId);
@@ -574,15 +576,17 @@ export async function checkInEntry(sessionId, entryId) {
     if (!entry.exists() || entry.data().status !== 'confirmed') throw error('Only confirmed players can check in.');
     if (entry.data().checkedIn) return;
     transaction.update(eRef, { checkedIn: true, checkedInAt: serverTimestamp(), updatedAt: serverTimestamp() });
+    // Use increment so concurrent check-ins do not collide on checkedInCount.
     transaction.update(sRef, {
-      checkedInCount: (session.data().checkedInCount || 0) + 1, updatedAt: serverTimestamp(),
+      checkedInCount: increment(1), updatedAt: serverTimestamp(),
     });
   });
   return { checkedIn: true };
 }
 
-export async function reservePlayer(sessionId, playerId) {
+export async function reservePlayer(sessionId, playerId, options = {}) {
   await ensureOrganizer();
+  const checkIn = options.checkIn === true;
   const id = doc(collection(db, 'sessions', sessionId, 'entries')).id;
   const result = await runTransaction(db, async (transaction) => {
     const sRef = sessionRef(sessionId);
@@ -594,25 +598,30 @@ export async function reservePlayer(sessionId, playerId) {
     if (!session.exists() || !session.data().open) throw error('This session is closed.');
     if (!player.exists() || player.data().active !== true) throw error('Player not found.');
     if (existingClaim.exists()) throw error('This player already has a reservation or waitlist place.', 'already-exists');
-    const confirmed = session.data().confirmedCount < session.data().capacity;
-    const status = confirmed ? 'confirmed' : 'waitlisted';
+    const hasOpenSpot = session.data().confirmedCount < session.data().capacity;
+    if (checkIn && !hasOpenSpot) {
+      throw error('No open confirmed spots left. Reserve to the waitlist instead.');
+    }
+    const status = hasOpenSpot ? 'confirmed' : 'waitlisted';
+    const shouldCheckIn = checkIn && status === 'confirmed';
     transaction.set(entryRef(sessionId, id), {
       sessionId, ownerUid: null, playerId,
       name: player.data().name, skillLevel: player.data().skillLevel,
       division: player.data().division || 'unspecified',
       photoData: player.data().photoData || null,
-      status, checkedIn: false, source: 'organizer',
+      status, checkedIn: shouldCheckIn, source: 'organizer',
       createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
       approvedAt: serverTimestamp(), reviewedAt: serverTimestamp(),
-      checkedInAt: null, checkedOutAt: null,
+      checkedInAt: shouldCheckIn ? serverTimestamp() : null, checkedOutAt: null,
     });
     transaction.set(claim, { entryId: id, createdAt: serverTimestamp() });
     transaction.update(sRef, {
-      confirmedCount: session.data().confirmedCount + (confirmed ? 1 : 0),
-      waitlistCount: (session.data().waitlistCount || 0) + (confirmed ? 0 : 1),
+      confirmedCount: session.data().confirmedCount + (status === 'confirmed' ? 1 : 0),
+      waitlistCount: (session.data().waitlistCount || 0) + (status === 'waitlisted' ? 1 : 0),
+      checkedInCount: (session.data().checkedInCount || 0) + (shouldCheckIn ? 1 : 0),
       updatedAt: serverTimestamp(),
     });
-    return { id, status };
+    return { id, status, checkedIn: shouldCheckIn };
   });
   return { entry: result };
 }

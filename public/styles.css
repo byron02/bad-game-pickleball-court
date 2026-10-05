@@ -198,6 +198,8 @@ h1, h2, h3, p { margin: 0; }
 .share-box .button { justify-self: start; }
 .settings-panel .button-danger-outline { margin-top: 25px; }
 .directory-list { display: grid; gap: 7px; max-height: 334px; overflow: auto; margin-top: 13px; }
+.fill-list { max-height: min(52vh, 420px); }
+.fill-panel { margin-top: 17px; }
 .directory-row { display: flex; align-items: center; gap: 10px; padding: 8px; border: 1px solid var(--line); border-radius: 10px; min-width: 0; }
 .directory-row .person-info { flex: 1; min-width: 0; }
 .directory-row strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
