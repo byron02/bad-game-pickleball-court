@@ -818,6 +818,11 @@ export async function createAndReservePlayer(sessionId, {
 export async function updatePlayer(playerId, changes, sessionId = null) {
   await ensureOrganizer();
   const patch = { updatedAt: serverTimestamp() };
+  if (Object.prototype.hasOwnProperty.call(changes, 'name')) {
+    const name = validName(changes.name);
+    patch.name = name;
+    patch.nameLower = name.toLocaleLowerCase();
+  }
   if (Object.prototype.hasOwnProperty.call(changes, 'skillLevel')) {
     patch.skillLevel = validSkill(changes.skillLevel);
   }
@@ -839,7 +844,11 @@ export async function updatePlayer(playerId, changes, sessionId = null) {
     // Court eligibility is read from the active session entry. Keep that
     // snapshot aligned with an organizer's profile edit for this session.
     if (entry?.exists() && ['confirmed', 'waitlisted'].includes(entry.data().status)) {
-      transaction.update(entry.ref, patch);
+      const entryPatch = { updatedAt: serverTimestamp() };
+      if (patch.name) entryPatch.name = patch.name;
+      if (patch.skillLevel) entryPatch.skillLevel = patch.skillLevel;
+      if (patch.division) entryPatch.division = patch.division;
+      transaction.update(entry.ref, entryPatch);
     }
   });
   const player = await getDoc(reference);

@@ -205,6 +205,7 @@ function renderEntry(entry, kind) {
     if (entry.playerId) {
       actions.append(actionButton(entry.partnerPlayerId ? 'Change pair' : 'Pair doubles', 'pair', entry.id, 'button-outline'));
       if (entry.partnerPlayerId) actions.append(actionButton('Unpair', 'unpair', entry.id, 'button-quiet'));
+      actions.append(actionButton('Edit', 'edit-entry-player', entry.playerId, 'button-quiet'));
     }
     actions.append(actionButton('Remove', 'remove', entry.id, 'button-quiet'));
   } else if (kind === 'waitlist') {
@@ -469,6 +470,10 @@ const courtUI = initCourtsUI({
 
 async function runEntryAction(action, entryId, button) {
   if (!session) return;
+  if (action === 'edit-entry-player') {
+    openPlayerEditor(button.dataset.id);
+    return;
+  }
   if (action === 'pair') {
     openPartnerDialog(entryId);
     return;
@@ -560,18 +565,24 @@ for (const list of [ui.pendingList, ui.confirmedList, ui.waitlistList, ui.todayP
     if (button) runEntryAction(button.dataset.action, button.dataset.id, button);
   });
 }
+function openPlayerEditor(playerId) {
+  const player = players.find((item) => item.id === playerId);
+  if (!player) return showAlert('Player profile not found.');
+  $('playerDialogTitle').textContent = `Edit ${player.name}`;
+  $('playerIdInput').value = player.id;
+  $('playerNameInput').value = player.name || '';
+  $('playerSkillInput').value = player.skillLevel || 'intermediate';
+  $('playerDivisionInput').value = player.division || 'unspecified';
+  $('playerDialog').showModal();
+  $('playerNameInput').focus();
+}
+
 ui.gotoPlayers?.addEventListener('click', () => showView('roster'));
 ui.directoryList.addEventListener('click', async (event) => {
   const button = event.target.closest('button[data-action]');
   if (!button || !session) return;
   if (button.dataset.action === 'edit-player') {
-    const player = players.find((item) => item.id === button.dataset.id);
-    if (!player) return;
-    $('playerDialogTitle').textContent = `Edit ${player.name}`;
-    $('playerIdInput').value = player.id;
-    $('playerSkillInput').value = player.skillLevel;
-    $('playerDivisionInput').value = player.division || 'unspecified';
-    $('playerDialog').showModal();
+    openPlayerEditor(button.dataset.id);
     return;
   }
   if (button.dataset.action !== 'reserve') return;
@@ -632,6 +643,7 @@ $('playerForm').addEventListener('submit', async (event) => {
   save.disabled = true;
   try {
     await updatePlayer($('playerIdInput').value, {
+      name: $('playerNameInput').value,
       skillLevel: $('playerSkillInput').value,
       division: $('playerDivisionInput').value,
     }, session?.id);

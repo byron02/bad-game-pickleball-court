@@ -321,8 +321,10 @@
   <dialog id="playerDialog" class="confirm-dialog court-dialog" aria-labelledby="playerDialogTitle">
     <form id="playerForm">
       <h2 id="playerDialogTitle">Edit player</h2>
-      <p>Skill and division eligibility affect which courts the player can join.</p>
+      <p>Update the display name, skill, or division used for today’s draws.</p>
       <input id="playerIdInput" type="hidden">
+      <label class="field-label" for="playerNameInput">Name</label>
+      <input id="playerNameInput" class="input" type="text" maxlength="60" required autocomplete="name">
       <label class="field-label" for="playerSkillInput">Skill level</label>
       <select id="playerSkillInput" class="input"><option value="beginner">Beginner</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option></select>
       <label class="field-label" for="playerDivisionInput">Division eligibility</label>
