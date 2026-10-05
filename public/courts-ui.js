@@ -129,6 +129,7 @@ export function initCourtsUI({ getSession, getEntries, showAlert, refreshRoster 
         if (preview?.lineup) {
           actions.append(button('Start this court', 'start', court.id, 'button-primary'));
           actions.append(button('Shuffle next', 'draw', court.id));
+          actions.append(button('Clear draw', 'clear-draw', court.id, 'button-quiet'));
         } else {
           actions.append(button('Draw next game', 'draw', court.id, 'button-primary'));
         }
