@@ -1,5 +1,5 @@
 import {
-  getAdminDashboard, watchAdminDashboard, signInOrganizer, signInOrganizerWithGoogle,
+  getAdminDashboard, watchAdminDashboard, signInOrganizerWithGoogle,
   signOutOrganizer, approveEntry, rejectEntry, removeEntry, checkInEntry, checkOutEntry,
   reservePlayer, updatePlayer, updateSession, resetSession,
 } from '../src/firebaseStore.js';
@@ -7,8 +7,8 @@ import { initCourtsUI } from './courts-ui.js';
 
 const $ = (id) => document.getElementById(id);
 const ui = {
-  alert: $('adminAlert'), auth: $('authPanel'), dashboard: $('dashboard'), authForm: $('authForm'),
-  authEmail: $('adminEmail'), authPassword: $('adminPassword'), googleSignIn: $('googleSignInButton'), signOut: $('signOutButton'),
+  alert: $('adminAlert'), auth: $('authPanel'), dashboard: $('dashboard'),
+  googleSignIn: $('googleSignInButton'), signOut: $('signOutButton'),
   sessionDate: $('sessionDateInput'), capacityInput: $('capacityInput'), settingsForm: $('settingsForm'),
   confirmed: $('adminConfirmed'), capacity: $('adminCapacity'), fill: $('adminCapacityFill'), availability: $('adminAvailability'),
   dateLabel: $('adminDateLabel'), checkedIn: $('checkedInMetric'), pending: $('pendingMetric'), waitlist: $('waitlistMetric'), open: $('openMetric'),
@@ -388,22 +388,6 @@ ui.resetForm.addEventListener('submit', async (event) => {
   }
 });
 
-ui.authForm.addEventListener('submit', async (event) => {
-  event.preventDefault();
-  if (!ui.authForm.reportValidity()) return;
-  const button = ui.authForm.querySelector('[type="submit"]');
-  button.disabled = true;
-  clearAlert();
-  try {
-    await signInOrganizer({ email: ui.authEmail.value.trim(), password: ui.authPassword.value });
-    ui.authPassword.value = '';
-    await beginDashboard();
-  } catch (error) {
-    showAlert(friendlyError(error));
-  } finally {
-    button.disabled = false;
-  }
-});
 ui.googleSignIn.addEventListener('click', async () => {
   ui.googleSignIn.disabled = true;
   clearAlert();
