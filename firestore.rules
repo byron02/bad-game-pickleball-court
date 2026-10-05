@@ -13,8 +13,27 @@ service cloud.firestore {
     function organizer() {
       return signedIn() &&
         request.auth.token.firebase.sign_in_provider != 'anonymous' &&
-        exists(/databases/$(database)/documents/organizers/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/organizers/$(request.auth.uid)).data.active == true;
+        (
+          (exists(/databases/$(database)/documents/organizers/$(request.auth.uid)) &&
+            get(/databases/$(database)/documents/organizers/$(request.auth.uid)).data.active == true) ||
+          (authEmail().size() > 0 &&
+            exists(/databases/$(database)/documents/organizerEmails/$(authEmail())) &&
+            get(/databases/$(database)/documents/organizerEmails/$(authEmail())).data.active == true)
+        );
+    }
+
+    function authEmail() {
+      return request.auth.token.email is string
+        ? request.auth.token.email.lower()
+        : '';
+    }
+
+    function validOrganizerEmail(email) {
+      return email is string &&
+        email.size() >= 5 &&
+        email.size() <= 254 &&
+        email == email.lower() &&
+        email.matches('^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$');
     }
 
     function validName(name) {
@@ -88,10 +107,34 @@ service cloud.firestore {
     }
 
     match /organizers/{uid} {
-      // Add the first organizer document from Firebase Console or Admin SDK.
-      // Clients cannot grant themselves organizer access.
-      allow get: if signedIn() && request.auth.uid == uid;
-      allow list, create, update, delete: if false;
+      // Legacy UID docs (bootstrap / synced accounts). Email access is managed in
+      // organizerEmails; signed-in users may sync their own UID doc when listed.
+      allow get: if signedIn() && (request.auth.uid == uid || organizer());
+      allow list: if organizer();
+      allow create, update: if signedIn() &&
+        request.auth.uid == uid &&
+        authEmail().size() > 0 &&
+        request.resource.data.active == true &&
+        validOrganizerEmail(request.resource.data.email) &&
+        request.resource.data.email == authEmail() &&
+        exists(/databases/$(database)/documents/organizerEmails/$(authEmail())) &&
+        get(/databases/$(database)/documents/organizerEmails/$(authEmail())).data.active == true;
+      allow update: if organizer() &&
+        request.resource.data.active is bool &&
+        (!request.resource.data.keys().hasAny(['email']) ||
+          request.resource.data.email == null ||
+          validOrganizerEmail(request.resource.data.email));
+      allow delete: if false;
+    }
+
+    match /organizerEmails/{email} {
+      allow get: if organizer() || (signedIn() && authEmail() == email);
+      allow list: if organizer();
+      allow create, update: if organizer() &&
+        validOrganizerEmail(email) &&
+        request.resource.data.email == email &&
+        request.resource.data.active is bool;
+      allow delete: if organizer();
     }
 
     match /daySessions/{date} {
@@ -114,12 +157,13 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // Public search exposes a small approved directory. The full player
-    // profile, including lifetime match statistics, stays organizer-managed.
+    // Public search and lifetime standings use this approved directory.
+    // Full player records stay in /players and remain organizer-managed.
     match /playerDirectory/{playerId} {
-      allow get: if anonymousPlayer();
-      allow list: if anonymousPlayer() && request.query.limit != null &&
-        request.query.limit <= 20;
+      allow get: if organizer() || anonymousPlayer();
+      allow list: if organizer() ||
+        (anonymousPlayer() && request.query.limit != null &&
+          request.query.limit <= 20);
       allow create, update, delete: if organizer();
     }
 
