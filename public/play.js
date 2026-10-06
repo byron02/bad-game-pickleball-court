@@ -404,6 +404,9 @@ function selectEntry(entryId, { openPin = true, resetView = openPin } = {}) {
   if (resetView) deskView = 'status';
   setDeskView(deskView);
   renderPairPanel(entry);
+  if (openPin || resetView) {
+    queueMicrotask(() => ui.selected.scrollIntoView({ behavior: 'smooth', block: 'nearest' }));
+  }
 }
 
 async function submitPin(event) {
