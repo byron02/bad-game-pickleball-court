@@ -15,7 +15,6 @@ import {
   getDoc,
   getDocFromServer,
   getDocs,
-  getDocsFromServer,
   getFirestore,
   connectFirestoreEmulator,
   limit,
@@ -26,7 +25,11 @@ import {
   serverTimestamp,
   setDoc,
   Timestamp,
+  updateDoc,
+  startAt,
+  endAt,
   where,
+  increment,
 } from 'firebase/firestore';
 import { firebaseConfig } from './firebaseConfig.js';
 
@@ -138,6 +141,20 @@ function directoryRef(playerId) { initializeClient(); return doc(db, 'playerDire
 function entryRef(sessionId, entryId) { initializeClient(); return doc(db, 'sessions', sessionId, 'entries', entryId); }
 function claimRef(sessionId, playerId) { initializeClient(); return doc(db, 'sessions', sessionId, 'playerClaims', playerId); }
 function playerLockRef(sessionId, playerId) { initializeClient(); return doc(db, 'sessions', sessionId, 'playerLocks', playerId); }
+function entryPinRef(sessionId, entryId) {
+  initializeClient();
+  return doc(db, 'sessions', sessionId, 'entryPins', entryId);
+}
+function playClaimRef(sessionId, uid) {
+  initializeClient();
+  return doc(db, 'sessions', sessionId, 'playClaims', uid);
+}
+
+function validPlayPin(value) {
+  const pin = String(value || '').trim();
+  if (!/^\d{4}$/.test(pin)) throw error('Use a 4-digit PIN.');
+  return pin;
+}
 
 function normalizedSession(snapshot) {
   if (!snapshot?.exists()) return null;
@@ -195,16 +212,20 @@ function normalizedEntry(snapshot, players = new Map()) {
     photoUrl: photoData,
     status: value.status,
     checkedIn: value.checkedIn === true,
+    sittingOut: value.sittingOut === true,
     source: value.source,
     ownerUid: value.ownerUid || null,
-    wins: value.wins || 0,
-    losses: value.losses || 0,
-    recentMatches: Array.isArray(value.recentMatches) ? value.recentMatches : [],
     createdAt: timestamp(value.createdAt),
     approvedAt: timestamp(value.approvedAt),
     reviewedAt: timestamp(value.reviewedAt),
     checkedInAt: timestamp(value.checkedInAt),
     checkedOutAt: timestamp(value.checkedOutAt),
+    partnerPlayerId: value.partnerPlayerId || null,
+    partnerRequestToPlayerId: value.partnerRequestToPlayerId || null,
+    partnerRequestGames: Number.isInteger(value.partnerRequestGames) ? value.partnerRequestGames : null,
+    partnerGamesRemaining: Number.isInteger(value.partnerGamesRemaining) ? value.partnerGamesRemaining : null,
+    hasPlayPin: value.hasPlayPin === true,
+    playClaimUid: value.playClaimUid || null,
   };
 }
 
@@ -215,10 +236,23 @@ function summarize(session, entries) {
   return { ...session, pendingCount, checkedInCount };
 }
 
-function authReady() {
+function authReady(timeoutMs = 15000) {
   initializeClient();
-  return new Promise((resolve) => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => { unsubscribe(); resolve(user); });
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      unsubscribe();
+      reject(error('Firebase Auth did not respond. Reload the page or check your connection.', 'timeout'));
+    }, timeoutMs);
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      unsubscribe();
+      resolve(user);
+    });
   });
 }
 
@@ -235,7 +269,12 @@ export function watchAuth(callback) {
 
 export async function ensurePublicAuth() {
   const current = await authReady();
-  if (current) return current;
+  if (current?.isAnonymous) return current;
+  // Admin Google/password sessions share this Firebase app. Player desk and
+  // signup need an anonymous uid for PIN claims and attendance writes.
+  if (current && !current.isAnonymous) {
+    await signOut(auth);
+  }
   if (!publicAuthPromise) {
     publicAuthPromise = signInAnonymously(auth).then((result) => result.user)
       .finally(() => { publicAuthPromise = null; });
@@ -243,17 +282,181 @@ export async function ensurePublicAuth() {
   return publicAuthPromise;
 }
 
+function normalizeEmail(value) {
+  const email = String(value || '').trim().toLowerCase();
+  if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw error('Enter a valid email address.', 'invalid-argument');
+  }
+  return email;
+}
+
+async function readOrganizerPermit(reference) {
+  try {
+    return await Promise.race([
+      getDocFromServer(reference),
+      new Promise((_, reject) => {
+        setTimeout(() => reject(error('Organizer check timed out.', 'timeout')), 10000);
+      }),
+    ]);
+  } catch (cause) {
+    if (cause?.code === 'timeout') {
+      try { return await getDoc(reference); } catch { throw cause; }
+    }
+    return getDoc(reference);
+  }
+}
+
+async function syncOrganizerUidDoc(user, email) {
+  try {
+    await setDoc(doc(db, 'organizers', user.uid), {
+      active: true,
+      email,
+      updatedAt: serverTimestamp(),
+      createdAt: serverTimestamp(),
+    }, { merge: true });
+  } catch {
+    // Rules or network may block the sync; email access still authorizes the desk.
+  }
+}
+
 async function ensureOrganizer() {
   const user = await authReady();
   if (!user) throw error('Organizer sign-in is required.', 'auth-required');
   if (user.isAnonymous) throw error('Organizer sign-in is required.', 'auth-required');
-  // An organizer may be approved after their first sign-in. Always check the
-  // server so a previously cached missing document cannot keep denying them.
-  const permit = await getDocFromServer(doc(db, 'organizers', user.uid));
-  if (!permit.exists() || permit.data().active !== true) {
-    throw error(`The account ${user.email || 'you selected'} is not approved as an organizer.`, 'organizer-not-approved');
+
+  const uidPermit = await readOrganizerPermit(doc(db, 'organizers', user.uid));
+  if (uidPermit.exists() && uidPermit.data().active === true) {
+    if (user.email) {
+      const email = normalizeEmail(user.email);
+      try {
+        await setDoc(doc(db, 'organizerEmails', email), {
+          email,
+          active: true,
+          updatedAt: serverTimestamp(),
+          createdAt: serverTimestamp(),
+        }, { merge: true });
+      } catch {
+        // Already authorized by UID; listing sync is best-effort.
+      }
+    }
+    return user;
   }
-  return user;
+
+  if (user.email) {
+    const email = normalizeEmail(user.email);
+    const emailPermit = await readOrganizerPermit(doc(db, 'organizerEmails', email));
+    if (emailPermit.exists() && emailPermit.data().active === true) {
+      await syncOrganizerUidDoc(user, email);
+      return user;
+    }
+  }
+
+  throw error(`The account ${user.email || 'you selected'} is not approved as an organizer.`, 'organizer-not-approved');
+}
+
+export async function listOrganizers() {
+  await ensureOrganizer();
+  const [emailSnaps, uidSnaps] = await Promise.all([
+    getDocs(collection(db, 'organizerEmails')),
+    getDocs(collection(db, 'organizers')),
+  ]);
+  const byEmail = new Map();
+  for (const item of emailSnaps.docs) {
+    const data = item.data();
+    if (data.active !== true) continue;
+    byEmail.set(item.id, {
+      email: item.id,
+      active: true,
+      uid: null,
+      updatedAt: timestamp(data.updatedAt),
+    });
+  }
+  for (const item of uidSnaps.docs) {
+    const data = item.data();
+    if (data.active !== true) continue;
+    const email = data.email ? String(data.email).trim().toLowerCase() : null;
+    if (email && byEmail.has(email)) {
+      byEmail.get(email).uid = item.id;
+      continue;
+    }
+    if (email) {
+      byEmail.set(email, {
+        email,
+        active: true,
+        uid: item.id,
+        updatedAt: timestamp(data.updatedAt),
+      });
+      continue;
+    }
+    byEmail.set(`uid:${item.id}`, {
+      email: null,
+      active: true,
+      uid: item.id,
+      updatedAt: timestamp(data.updatedAt),
+    });
+  }
+  return [...byEmail.values()].sort((a, b) =>
+    String(a.email || a.uid).localeCompare(String(b.email || b.uid)));
+}
+
+export async function addOrganizer(emailInput) {
+  const user = await ensureOrganizer();
+  const email = normalizeEmail(emailInput);
+  if (user.email && normalizeEmail(user.email) === email) {
+    throw error('You are already signed in as an organizer.', 'invalid-argument');
+  }
+  const existing = await listOrganizers();
+  if (existing.some((item) => item.active && item.email === email)) {
+    throw error(`${email} is already an organizer.`, 'already-exists');
+  }
+  await setDoc(doc(db, 'organizerEmails', email), {
+    email,
+    active: true,
+    addedByUid: user.uid,
+    addedByEmail: user.email ? normalizeEmail(user.email) : null,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }, { merge: true });
+  return { email };
+}
+
+export async function removeOrganizer(emailOrUid) {
+  const user = await ensureOrganizer();
+  const value = String(emailOrUid || '').trim();
+  if (!value) throw error('Choose an organizer to remove.');
+
+  if (value.includes('@')) {
+    const email = normalizeEmail(value);
+    if (user.email && normalizeEmail(user.email) === email) {
+      throw error('You cannot remove your own organizer access.', 'invalid-argument');
+    }
+    await setDoc(doc(db, 'organizerEmails', email), {
+      email,
+      active: false,
+      updatedAt: serverTimestamp(),
+    }, { merge: true });
+    const uidSnaps = await getDocs(collection(db, 'organizers'));
+    await Promise.all(uidSnaps.docs
+      .filter((item) => item.data().active === true
+        && String(item.data().email || '').trim().toLowerCase() === email)
+      .map((item) => setDoc(item.ref, { active: false, updatedAt: serverTimestamp() }, { merge: true })));
+    return { email };
+  }
+
+  if (value === user.uid) throw error('You cannot remove your own organizer access.', 'invalid-argument');
+  const reference = doc(db, 'organizers', value);
+  const existing = await getDoc(reference);
+  if (!existing.exists()) throw error('That organizer was not found.', 'not-found');
+  const email = existing.data().email ? String(existing.data().email).trim().toLowerCase() : null;
+  await setDoc(reference, { active: false, updatedAt: serverTimestamp() }, { merge: true });
+  if (email) {
+    await setDoc(doc(db, 'organizerEmails', email), {
+      email,
+      active: false,
+      updatedAt: serverTimestamp(),
+    }, { merge: true });
+  }
+  return { uid: value, email };
 }
 
 export async function signInOrganizer({ email, password }) {
@@ -299,39 +502,96 @@ export async function getCurrentSession(date = todayManila()) {
 
 export async function getPublicSession(sessionId) {
   await ensurePublicAuth();
-  let snapshot;
-  try {
-    snapshot = await getDocFromServer(sessionRef(String(sessionId || '')));
-  } catch (cause) {
-    if (cause.code === 'permission-denied') throw error('This signup link has expired or is closed.', 'not-found');
-    throw cause;
-  }
+  const snapshot = await getDoc(sessionRef(String(sessionId || '')));
   if (!snapshot.exists()) throw error('This signup link has expired or is closed.', 'not-found');
   return { session: normalizedSession(snapshot) };
 }
 
-export async function searchPlayers(text) {
+/** Resolve today's open session for /play when no share token is in the URL. */
+export async function getPublicPlaySession(sessionId = null) {
   await ensurePublicAuth();
-  const needle = String(text || '').trim().replace(/\s+/g, ' ').toLocaleLowerCase();
-  if (needle.length < 2) return { players: [] };
-  const results = await getDocsFromServer(query(
-    collection(db, 'playerDirectory'), where('active', '==', true), limit(512),
-  ));
-  const players = results.docs.map(normalizedPlayer)
-    .filter((player) => searchPrefixes(player.name).includes(needle))
-    .sort((a, b) => a.name.localeCompare(b.name));
-  return { players: players.slice(0, 20) };
+  const explicit = String(sessionId || '').trim();
+  if (explicit) {
+    const snapshot = await getDoc(sessionRef(explicit));
+    if (!snapshot.exists()) throw error('This player desk link has expired or is closed.', 'not-found');
+    const session = normalizedSession(snapshot);
+    if (!session.open) throw error('Today’s player desk is closed.', 'failed-precondition');
+    return { session };
+  }
+  const date = todayManila();
+  const pointer = await getDoc(dayRef(date));
+  if (!pointer.exists() || !pointer.data().currentSessionId) {
+    throw error('No open play desk for today yet. Ask the organizer to open the session.', 'not-found');
+  }
+  const snapshot = await getDoc(sessionRef(pointer.data().currentSessionId));
+  if (!snapshot.exists()) {
+    throw error('No open play desk for today yet. Ask the organizer to open the session.', 'not-found');
+  }
+  const session = normalizedSession(snapshot);
+  if (!session.open) throw error('Today’s player desk is closed.', 'failed-precondition');
+  return { session };
 }
 
+function directoryPayload(player, overrides = {}) {
+  const name = overrides.name || player.name;
+  const nameLower = overrides.nameLower || player.nameLower || String(name || '').toLocaleLowerCase();
+  return {
+    name,
+    nameLower,
+    searchPrefixes: Object.prototype.hasOwnProperty.call(overrides, 'searchPrefixes')
+      ? overrides.searchPrefixes
+      : (player.searchPrefixes || searchPrefixes(name)),
+    skillLevel: overrides.skillLevel || player.skillLevel,
+    division: overrides.division || player.division || 'unspecified',
+    photoData: Object.prototype.hasOwnProperty.call(overrides, 'photoData')
+      ? overrides.photoData
+      : (player.photoData || null),
+    active: Object.prototype.hasOwnProperty.call(overrides, 'active')
+      ? overrides.active !== false
+      : (player.active !== false),
+    wins: Number(Object.prototype.hasOwnProperty.call(overrides, 'wins') ? overrides.wins : (player.wins || 0)),
+    losses: Number(Object.prototype.hasOwnProperty.call(overrides, 'losses') ? overrides.losses : (player.losses || 0)),
+  };
+}
+
+export async function searchPlayers(text) {
+  await ensurePublicAuth();
+  const needle = String(text || '').trim().toLocaleLowerCase();
+  if (needle.length < 2) return { players: [] };
+  const results = await getDocs(query(
+    collection(db, 'playerDirectory'),
+    orderBy('nameLower'),
+    startAt(needle), endAt(`${needle}\uf8ff`), limit(20),
+  ));
+  return { players: results.docs.map(normalizedPlayer) };
+}
+
+/** Organizer search across the full player database for event desks. */
 export async function searchAdminPlayers(text = '') {
   await ensureOrganizer();
   const needle = String(text || '').trim().replace(/\s+/g, ' ').toLocaleLowerCase();
   if (needle && needle.length < 2) return { players: [], hasMore: false };
-  const results = await getDocsFromServer(query(collection(db, 'players'), where('active', '==', true)));
-  const players = results.docs.map(normalizedPlayer)
-    .filter((player) => !needle || searchPrefixes(player.name).includes(needle))
+  const players = (await listPlayers())
+    .filter((player) => !needle || searchPrefixes(player.name).includes(needle)
+      || String(player.nameLower || '').includes(needle))
     .sort((a, b) => a.name.localeCompare(b.name));
   return { players: players.slice(0, 40), hasMore: players.length > 40 };
+}
+
+/** Public lifetime leaderboard from the approved directory. */
+export async function getTopPlayers({ limit: size = 5 } = {}) {
+  await ensurePublicAuth();
+  const capped = Math.min(Math.max(Number(size) || 5, 1), 10);
+  const results = await getDocs(query(
+    collection(db, 'playerDirectory'),
+    orderBy('wins', 'desc'),
+    limit(20),
+  ));
+  const players = results.docs
+    .map(normalizedPlayer)
+    .filter((player) => (player.wins + player.losses) > 0)
+    .slice(0, capped);
+  return { players };
 }
 
 export async function submitSignup({ sessionId, playerId = null, name, skillLevel, division = 'unspecified', photoData = null }) {
@@ -342,7 +602,7 @@ export async function submitSignup({ sessionId, playerId = null, name, skillLeve
   let selectedSkill;
   let selectedDivision;
   if (playerId) {
-    const player = await getDocFromServer(directoryRef(playerId));
+    const player = await getDoc(playerRef(playerId));
     if (!player.exists() || player.data().active !== true) throw error('Select a listed player.');
     selectedName = player.data().name;
     selectedSkill = player.data().skillLevel;
@@ -386,37 +646,105 @@ export async function watchMySignup(sessionId, callback) {
   }, callback);
 }
 
-async function listEntries(sessionId, players = new Map()) {
-  const snapshots = await getDocs(collection(db, 'sessions', sessionId, 'entries'));
-  return snapshots.docs.filter((item) =>
-    ['pending', 'confirmed', 'waitlisted', 'waitlist'].includes(item.data().status))
-    .sort((a, b) => timestampMillis(a.data().createdAt) - timestampMillis(b.data().createdAt))
-    .map((snapshot) => normalizedEntry(snapshot, players));
+/** Confirmed roster for the player desk. Attendance actions stay owner-only. */
+export async function listPublicRoster(sessionId) {
+  await ensurePublicAuth();
+  const snapshots = await getDocs(query(
+    collection(db, 'sessions', String(sessionId || ''), 'entries'),
+    where('status', '==', 'confirmed'),
+  ));
+  return snapshots.docs
+    .map((snapshot) => normalizedEntry(snapshot))
+    .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' }));
 }
 
-function timestampMillis(value) {
-  return typeof value?.toMillis === 'function' ? value.toMillis() : 0;
+export async function watchPublicRoster(sessionId, callback) {
+  await ensurePublicAuth();
+  let generation = 0;
+  return onSnapshot(
+    query(
+      collection(db, 'sessions', String(sessionId || ''), 'entries'),
+      where('status', '==', 'confirmed'),
+    ),
+    (snapshot) => {
+      const entries = snapshot.docs
+        .map((item) => normalizedEntry(item))
+        .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' }));
+      const myGeneration = ++generation;
+      enrichRosterRecords(entries)
+        .then((enriched) => {
+          if (myGeneration !== generation) return;
+          callback(enriched);
+        })
+        .catch(() => {
+          if (myGeneration !== generation) return;
+          callback(entries);
+        });
+    },
+    (cause) => callback([], cause),
+  );
+}
+
+async function enrichRosterRecords(entries) {
+  const ids = [...new Set(entries.map((entry) => entry.playerId).filter(Boolean))];
+  if (!ids.length) return entries;
+  const pairs = await Promise.all(ids.map(async (playerId) => {
+    try {
+      const snap = await getDoc(directoryRef(playerId));
+      if (!snap.exists()) return [playerId, null];
+      const data = snap.data();
+      return [playerId, { wins: Number(data.wins || 0), losses: Number(data.losses || 0) }];
+    } catch {
+      return [playerId, null];
+    }
+  }));
+  const records = new Map(pairs);
+  return entries.map((entry) => {
+    const record = entry.playerId ? records.get(entry.playerId) : null;
+    return record
+      ? { ...entry, wins: record.wins, losses: record.losses }
+      : entry;
+  });
+}
+
+export async function getPublicAuthUid() {
+  const user = await ensurePublicAuth();
+  return user.uid;
+}
+
+async function listEntries(sessionId, players = new Map()) {
+  const snapshots = await getDocs(query(
+    collection(db, 'sessions', sessionId, 'entries'), orderBy('createdAt', 'asc'),
+  ));
+  return snapshots.docs.map((snapshot) => normalizedEntry(snapshot, players));
+}
+
+async function listPlayers() {
+  const snapshots = await getDocs(query(collection(db, 'players'), orderBy('nameLower', 'asc')));
+  return snapshots.docs.map(normalizedPlayer);
 }
 
 export async function getAdminDashboard(date = todayManila()) {
   await ensureOrganizer();
   const session = await getCurrentSession(date);
-  await reconcileWaitlist(session.id);
-  const entries = await listEntries(session.id);
-  return { session: summarize(normalizedSession(await getDoc(sessionRef(session.id))), entries), entries };
+  const players = await listPlayers();
+  const entries = await listEntries(session.id, new Map(players.map((player) => [player.id, player])));
+  return { session: summarize(session, entries), entries, players };
 }
 
 export async function watchAdminDashboard(callback, date = todayManila()) {
   await ensureOrganizer();
-  const current = await getCurrentSession(date);
-  await reconcileWaitlist(current.id);
+  await getCurrentSession(date);
   let stopSession = () => {};
   let stopEntries = () => {};
   let session = null;
   let entries = [];
+  let players = [];
   let currentSessionId = null;
-  const emit = () => { if (session) callback({ session: summarize(session, entries), entries }); };
+  const emit = () => { if (session) callback({ session: summarize(session, entries), entries, players }); };
   const onError = (cause) => callback({ error: cause });
+  const stopPlayers = onSnapshot(query(collection(db, 'players'), orderBy('nameLower', 'asc')),
+    (snapshot) => { players = snapshot.docs.map(normalizedPlayer); emit(); }, onError);
   const stopPointer = onSnapshot(dayRef(date), (pointer) => {
     if (!pointer.exists()) return;
     const nextId = pointer.data().currentSessionId;
@@ -427,41 +755,18 @@ export async function watchAdminDashboard(callback, date = todayManila()) {
     stopSession = onSnapshot(sessionRef(nextId), (snapshot) => {
       session = normalizedSession(snapshot); emit();
     }, onError);
-    stopEntries = onSnapshot(collection(db, 'sessions', nextId, 'entries'),
+    stopEntries = onSnapshot(query(collection(db, 'sessions', nextId, 'entries'), orderBy('createdAt', 'asc')),
       (snapshot) => {
-        entries = snapshot.docs.filter((item) =>
-          ['pending', 'confirmed', 'waitlisted', 'waitlist'].includes(item.data().status))
-          .sort((a, b) => timestampMillis(a.data().createdAt) - timestampMillis(b.data().createdAt))
-          .map((item) => normalizedEntry(item));
+        const map = new Map(players.map((player) => [player.id, player]));
+        entries = snapshot.docs.map((item) => normalizedEntry(item, map));
         emit();
       }, onError);
   }, onError);
-  return () => { stopPointer(); stopSession(); stopEntries(); };
+  return () => { stopPointer(); stopSession(); stopEntries(); stopPlayers(); };
 }
 
-async function previousClosedEntry(sessionId, playerId) {
-  const results = await getDocsFromServer(query(
-    collection(db, 'sessions', sessionId, 'entries'), where('playerId', '==', playerId),
-  ));
-  return results.docs.filter((entry) => ['checked_out', 'removed'].includes(entry.data().status))
-    .sort((a, b) => timestampMillis(b.data().createdAt) - timestampMillis(a.data().createdAt))[0] || null;
-}
-
-function matchSummary(entry) {
-  const value = entry?.data() || {};
-  return {
-    wins: Number.isInteger(value.wins) && value.wins >= 0 ? value.wins : 0,
-    losses: Number.isInteger(value.losses) && value.losses >= 0 ? value.losses : 0,
-    recentMatches: Array.isArray(value.recentMatches) ? value.recentMatches.slice(0, 4) : [],
-  };
-}
-
-export async function approveEntry(sessionId, entryId) {
+export async function approveEntry(sessionId, entryId, options = {}) {
   await ensureOrganizer();
-  const pending = await getDocFromServer(entryRef(sessionId, entryId));
-  if (!pending.exists() || pending.data().status !== 'pending') throw error('This request is no longer pending.');
-  const priorEntry = pending.data().playerId
-    ? await previousClosedEntry(sessionId, pending.data().playerId) : null;
   const result = await runTransaction(db, async (transaction) => {
     const sRef = sessionRef(sessionId);
     const eRef = entryRef(sessionId, entryId);
@@ -469,7 +774,16 @@ export async function approveEntry(sessionId, entryId) {
     if (!session.exists() || !session.data().open) throw error('This session is closed.');
     if (!entry.exists() || entry.data().status !== 'pending') throw error('This request is no longer pending.');
     const request = entry.data();
-    if (request.playerId !== pending.data().playerId) throw error('This request changed. Try again.', 'aborted');
+    const skillLevel = validSkill(
+      Object.prototype.hasOwnProperty.call(options, 'skillLevel')
+        ? options.skillLevel
+        : request.skillLevel,
+    );
+    const name = validName(
+      Object.prototype.hasOwnProperty.call(options, 'name')
+        ? options.name
+        : request.name,
+    );
     const existingPlayer = request.playerId ? playerRef(request.playerId) : null;
     const freshPlayer = existingPlayer || doc(collection(db, 'players'));
     const player = existingPlayer ? await transaction.get(existingPlayer) : null;
@@ -479,63 +793,55 @@ export async function approveEntry(sessionId, entryId) {
     const claim = claimRef(sessionId, freshPlayer.id);
     const currentClaim = existingPlayer ? await transaction.get(claim) : null;
     if (currentClaim?.exists()) throw error('This player already has a reservation or waitlist place.', 'already-exists');
-    const prior = priorEntry ? await transaction.get(priorEntry.ref) : null;
-    const summary = prior?.exists() && ['checked_out', 'removed'].includes(prior.data().status)
-      ? matchSummary(prior) : matchSummary(null);
     const confirmed = session.data().confirmedCount < session.data().capacity;
     const status = confirmed ? 'confirmed' : 'waitlisted';
     if (!existingPlayer) {
-      const name = validName(request.name);
       const profile = {
-        name, nameLower: name.toLocaleLowerCase(), searchPrefixes: searchPrefixes(name),
-        skillLevel: validSkill(request.skillLevel),
+        name, nameLower: name.toLocaleLowerCase(), searchPrefixes: searchPrefixes(name), skillLevel,
         division: validDivision(request.division),
         photoData: validPhoto(request.photoData), active: true, wins: 0, losses: 0,
         createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
       };
       transaction.set(freshPlayer, profile);
-      transaction.set(directoryRef(freshPlayer.id), {
-        name: profile.name, nameLower: profile.nameLower,
-        searchPrefixes: profile.searchPrefixes, active: true,
-        skillLevel: profile.skillLevel, division: profile.division,
-        photoData: profile.photoData,
-      });
-    } else if (request.photoData) {
-      const photoData = validPhoto(request.photoData);
-      transaction.update(existingPlayer, { photoData, updatedAt: serverTimestamp() });
-      transaction.set(directoryRef(freshPlayer.id), {
-        name: player.data().name,
-        nameLower: player.data().nameLower || player.data().name.toLocaleLowerCase(),
-        searchPrefixes: searchPrefixes(player.data().name), active: true,
-        skillLevel: player.data().skillLevel,
-        division: player.data().division || 'unspecified',
-        photoData,
-      }, { merge: true });
+      transaction.set(directoryRef(freshPlayer.id), directoryPayload(profile));
+    } else {
+      const photoData = request.photoData ? validPhoto(request.photoData) : player.data().photoData || null;
+      const playerPatch = {
+        name,
+        nameLower: name.toLocaleLowerCase(),
+        searchPrefixes: searchPrefixes(name),
+        skillLevel,
+        updatedAt: serverTimestamp(),
+      };
+      if (request.photoData) playerPatch.photoData = photoData;
+      transaction.update(existingPlayer, playerPatch);
+      transaction.set(directoryRef(freshPlayer.id), directoryPayload(player.data(), {
+        name, nameLower: name.toLocaleLowerCase(), searchPrefixes: searchPrefixes(name), skillLevel, photoData,
+      }), { merge: true });
     }
     transaction.set(claim, { entryId, createdAt: serverTimestamp() });
     transaction.update(eRef, {
-      playerId: freshPlayer.id, status, approvedAt: serverTimestamp(),
-      ...summary,
+      playerId: freshPlayer.id, name, status, skillLevel, approvedAt: serverTimestamp(),
       reviewedAt: serverTimestamp(), updatedAt: serverTimestamp(),
+      sittingOut: false, partnerPlayerId: null, partnerRequestToPlayerId: null,
+      partnerRequestGames: null, partnerGamesRemaining: null,
     });
     transaction.update(sRef, {
       confirmedCount: session.data().confirmedCount + (confirmed ? 1 : 0),
       waitlistCount: (session.data().waitlistCount || 0) + (confirmed ? 0 : 1),
       updatedAt: serverTimestamp(),
     });
-    return { status, playerId: freshPlayer.id };
+    return { status, playerId: freshPlayer.id, skillLevel, name };
   });
   return result;
 }
 
 async function promoteOldest(sessionId) {
-  for (let attempts = 0; attempts < 8; attempts += 1) {
-    const candidates = await getDocsFromServer(query(
-      collection(db, 'sessions', sessionId, 'entries'),
-      where('status', '==', 'waitlisted'),
+  for (let attempts = 0; attempts < 5; attempts += 1) {
+    const candidates = await getDocs(query(
+      collection(db, 'sessions', sessionId, 'entries'), orderBy('createdAt', 'asc'),
     ));
-    const candidate = candidates.docs.sort((a, b) =>
-      timestampMillis(a.data().createdAt) - timestampMillis(b.data().createdAt))[0];
+    const candidate = candidates.docs.find((item) => item.data().status === 'waitlisted');
     if (!candidate) return null;
     try {
       return await runTransaction(db, async (transaction) => {
@@ -543,7 +849,7 @@ async function promoteOldest(sessionId) {
         const eRef = entryRef(sessionId, candidate.id);
         const [session, entry] = await Promise.all([transaction.get(sRef), transaction.get(eRef)]);
         if (!session.exists() || !session.data().open || session.data().confirmedCount >= session.data().capacity) return null;
-        if (!entry.exists() || entry.data().status !== 'waitlisted') throw error('Waitlist changed.', 'stale-candidate');
+        if (!entry.exists() || entry.data().status !== 'waitlisted') throw error('Waitlist changed.', 'aborted');
         transaction.update(eRef, { status: 'confirmed', updatedAt: serverTimestamp() });
         transaction.update(sRef, {
           confirmedCount: session.data().confirmedCount + 1,
@@ -553,107 +859,696 @@ async function promoteOldest(sessionId) {
         return candidate.id;
       });
     } catch (cause) {
-      if (cause.code !== 'stale-candidate') throw cause;
+      if (cause.code !== 'aborted') throw cause;
     }
   }
-  throw error('The waitlist changed repeatedly. Try again.', 'aborted');
+  return null;
 }
 
-export async function reconcileWaitlist(sessionId) {
-  await ensureOrganizer();
-  let promotedCount = 0;
+async function fillOpenSpots(sessionId) {
   for (let n = 0; n < 512; n += 1) {
     const promoted = await promoteOldest(sessionId);
     if (!promoted) break;
-    promotedCount += 1;
   }
-  return { promotedCount };
 }
 
 async function closeEntry(sessionId, entryId, status) {
   await ensureOrganizer();
-  for (let attempts = 0; attempts < 8; attempts += 1) {
-    const before = await getDocFromServer(entryRef(sessionId, entryId));
-    if (!before.exists()) throw error('Reservation not found.', 'not-found');
-    const shouldPromote = before.data().status === 'confirmed';
-    const candidates = shouldPromote ? await getDocsFromServer(query(
-      collection(db, 'sessions', sessionId, 'entries'),
-      where('status', '==', 'waitlisted'),
-    )) : null;
-    const candidateRef = candidates?.docs.sort((a, b) =>
-      timestampMillis(a.data().createdAt) - timestampMillis(b.data().createdAt))[0]?.ref || null;
-    try {
-      await runTransaction(db, async (transaction) => {
-        const sRef = sessionRef(sessionId);
-        const eRef = entryRef(sessionId, entryId);
-        const [session, entry, candidate] = await Promise.all([
-          transaction.get(sRef), transaction.get(eRef),
-          candidateRef ? transaction.get(candidateRef) : Promise.resolve(null),
-        ]);
-        if (!session.exists() || !entry.exists()) throw error('Reservation not found.', 'not-found');
-        const prior = entry.data();
-        if (!['pending', 'confirmed', 'waitlisted'].includes(prior.status)) {
-          throw error('This request is already closed.');
-        }
-        const wasConfirmed = prior.status === 'confirmed';
-        const wasWaitlisted = prior.status === 'waitlisted';
-        if (wasConfirmed !== shouldPromote ||
-            (wasConfirmed && !candidateRef && (session.data().waitlistCount || 0) > 0) ||
-            (wasConfirmed && candidateRef && (!candidate?.exists() || candidate.data().status !== 'waitlisted'))) {
-          throw error('Waitlist changed.', 'stale-candidate');
-        }
-        const claim = prior.playerId && (wasConfirmed || wasWaitlisted) ? claimRef(sessionId, prior.playerId) : null;
-        const lock = prior.playerId && wasConfirmed ? await transaction.get(playerLockRef(sessionId, prior.playerId)) : null;
-        if (lock?.exists()) throw error('Replace or finish this player\'s game first.');
-        const existingClaim = claim ? await transaction.get(claim) : null;
-        const promoted = wasConfirmed && session.data().open === true && candidate?.exists();
-        transaction.update(eRef, {
-          status, checkedIn: false, checkedOutAt: status === 'checked_out' ? serverTimestamp() : prior.checkedOutAt || null,
-          reviewedAt: serverTimestamp(), updatedAt: serverTimestamp(),
-        });
-        if (existingClaim?.exists() && existingClaim.data().entryId === entryId) transaction.delete(claim);
-        if (promoted) transaction.update(candidateRef, { status: 'confirmed', updatedAt: serverTimestamp() });
-        transaction.update(sRef, {
-          confirmedCount: session.data().confirmedCount - (wasConfirmed ? 1 : 0) + (promoted ? 1 : 0),
-          checkedInCount: (session.data().checkedInCount || 0) - (wasConfirmed && prior.checkedIn ? 1 : 0),
-          waitlistCount: (session.data().waitlistCount || 0) - (wasWaitlisted ? 1 : 0) - (promoted ? 1 : 0),
-          updatedAt: serverTimestamp(),
-        });
-      });
-      return { status };
-    } catch (cause) {
-      if (cause.code !== 'stale-candidate') throw cause;
+  const freed = await runTransaction(db, async (transaction) => {
+    const sRef = sessionRef(sessionId);
+    const eRef = entryRef(sessionId, entryId);
+    const [session, entry] = await Promise.all([transaction.get(sRef), transaction.get(eRef)]);
+    if (!session.exists() || !entry.exists()) throw error('Reservation not found.', 'not-found');
+    const prior = entry.data();
+    if (!['pending', 'confirmed', 'waitlisted'].includes(prior.status)) {
+      throw error('This request is already closed.');
     }
-  }
-  throw error('The waitlist changed repeatedly. Try again.', 'aborted');
+    const wasConfirmed = prior.status === 'confirmed';
+    const wasWaitlisted = prior.status === 'waitlisted';
+    const claim = prior.playerId && (wasConfirmed || wasWaitlisted) ? claimRef(sessionId, prior.playerId) : null;
+    const lock = prior.playerId && wasConfirmed ? await transaction.get(playerLockRef(sessionId, prior.playerId)) : null;
+    if (lock?.exists()) throw error('Replace or finish this player\'s game first.');
+    const existingClaim = claim ? await transaction.get(claim) : null;
+    let partnerEntry = null;
+    if (prior.partnerPlayerId) {
+      const partnerClaim = await transaction.get(claimRef(sessionId, prior.partnerPlayerId));
+      if (partnerClaim.exists()) {
+        partnerEntry = await transaction.get(entryRef(sessionId, partnerClaim.data().entryId));
+      }
+    }
+    transaction.update(eRef, {
+      status,
+      checkedIn: false,
+      sittingOut: false,
+      checkedOutAt: status === 'checked_out' ? serverTimestamp() : prior.checkedOutAt || null,
+      reviewedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      partnerPlayerId: null,
+      partnerRequestToPlayerId: null,
+      partnerRequestGames: null,
+      partnerGamesRemaining: null,
+    });
+    if (existingClaim?.exists() && existingClaim.data().entryId === entryId) transaction.delete(claim);
+    if (partnerEntry?.exists() && partnerEntry.data().partnerPlayerId === prior.playerId) {
+      transaction.update(partnerEntry.ref, {
+        partnerPlayerId: null,
+        partnerRequestToPlayerId: null,
+        partnerRequestGames: null,
+        partnerGamesRemaining: null,
+        updatedAt: serverTimestamp(),
+      });
+    }
+    const sessionPatch = {
+      confirmedCount: session.data().confirmedCount - (wasConfirmed ? 1 : 0),
+      waitlistCount: (session.data().waitlistCount || 0) - (wasWaitlisted ? 1 : 0),
+      updatedAt: serverTimestamp(),
+    };
+    if (wasConfirmed && prior.checkedIn) sessionPatch.checkedInCount = increment(-1);
+    transaction.update(sRef, sessionPatch);
+    return wasConfirmed;
+  });
+  if (freed) await promoteOldest(sessionId);
+  return { status };
 }
 
 export async function rejectEntry(sessionId, entryId) { return closeEntry(sessionId, entryId, 'rejected'); }
 export async function removeEntry(sessionId, entryId) { return closeEntry(sessionId, entryId, 'removed'); }
 export async function checkOutEntry(sessionId, entryId) { return closeEntry(sessionId, entryId, 'checked_out'); }
 
+/** Lock two confirmed players as a doubles pair for today's draws, or clear the lock. */
+export async function setEntryPartner(sessionId, entryId, partnerPlayerId = null) {
+  await ensureOrganizer();
+  const partnerId = partnerPlayerId ? idOfPlayer(partnerPlayerId) : null;
+  await runTransaction(db, async (transaction) => {
+    const eRef = entryRef(sessionId, entryId);
+    const entry = await transaction.get(eRef);
+    if (!entry.exists() || entry.data().status !== 'confirmed') {
+      throw error('Only confirmed players can be paired.');
+    }
+    const prior = entry.data();
+    if (!prior.playerId) throw error('Pair players who have a saved profile.');
+
+    const previousPartnerId = prior.partnerPlayerId || null;
+    let previousPartnerEntry = null;
+    if (previousPartnerId) {
+      const previousClaim = await transaction.get(claimRef(sessionId, previousPartnerId));
+      if (previousClaim.exists()) {
+        previousPartnerEntry = await transaction.get(entryRef(sessionId, previousClaim.data().entryId));
+      }
+    }
+
+    let nextPartnerEntry = null;
+    let nextPartnerPrevious = null;
+    if (partnerId) {
+      if (partnerId === prior.playerId) throw error('A player cannot pair with themselves.');
+      const partnerClaim = await transaction.get(claimRef(sessionId, partnerId));
+      if (!partnerClaim.exists()) throw error('Partner is not on today’s roster.');
+      nextPartnerEntry = await transaction.get(entryRef(sessionId, partnerClaim.data().entryId));
+      if (!nextPartnerEntry.exists() || nextPartnerEntry.data().status !== 'confirmed') {
+        throw error('Partner must also be confirmed for today.');
+      }
+      const nextPriorPartnerId = nextPartnerEntry.data().partnerPlayerId || null;
+      if (nextPriorPartnerId && nextPriorPartnerId !== prior.playerId) {
+        const otherClaim = await transaction.get(claimRef(sessionId, nextPriorPartnerId));
+        if (otherClaim.exists()) {
+          nextPartnerPrevious = await transaction.get(entryRef(sessionId, otherClaim.data().entryId));
+        }
+      }
+    }
+
+    if (previousPartnerEntry?.exists() && previousPartnerEntry.data().partnerPlayerId === prior.playerId) {
+      transaction.update(previousPartnerEntry.ref, {
+        partnerPlayerId: null,
+        partnerRequestGames: null,
+        partnerGamesRemaining: null,
+        updatedAt: serverTimestamp(),
+      });
+    }
+    if (nextPartnerPrevious?.exists() &&
+        nextPartnerPrevious.data().partnerPlayerId === partnerId) {
+      transaction.update(nextPartnerPrevious.ref, {
+        partnerPlayerId: null,
+        partnerRequestGames: null,
+        partnerGamesRemaining: null,
+        updatedAt: serverTimestamp(),
+      });
+    }
+    transaction.update(eRef, {
+      partnerPlayerId: partnerId,
+      partnerRequestToPlayerId: null,
+      partnerRequestGames: null,
+      partnerGamesRemaining: partnerId ? null : null,
+      updatedAt: serverTimestamp(),
+    });
+    if (nextPartnerEntry) {
+      transaction.update(nextPartnerEntry.ref, {
+        partnerPlayerId: prior.playerId,
+        partnerRequestToPlayerId: null,
+        partnerRequestGames: null,
+        partnerGamesRemaining: null,
+        updatedAt: serverTimestamp(),
+      });
+    }
+  });
+  return { partnerPlayerId: partnerId };
+}
+
+function idOfPlayer(value) {
+  if (typeof value !== 'string' || !value.trim() || value.includes('/')) {
+    throw error('Player id is invalid.');
+  }
+  return value.trim();
+}
+
+/** null = unlimited; otherwise 1–20 games together. */
+function normalizePartnerGames(value) {
+  if (value == null || value === '' || value === 'unlimited') return null;
+  const games = Number(value);
+  if (!Number.isInteger(games) || games < 1 || games > 20) {
+    throw error('Choose 1–20 games together, or unlimited.');
+  }
+  return games;
+}
+
+async function withContentionRetries(work) {
+  let lastError;
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    try {
+      return await work();
+    } catch (cause) {
+      lastError = cause;
+      const code = String(cause?.code || '');
+      if (!code.includes('failed-precondition') && !code.includes('aborted')) throw cause;
+      await new Promise((resolve) => setTimeout(resolve, 35 * (attempt + 1)));
+    }
+  }
+  throw lastError || error('The session changed while saving. Tap Refresh and try again.', 'aborted');
+}
+
 export async function checkInEntry(sessionId, entryId) {
   await ensureOrganizer();
-  await runTransaction(db, async (transaction) => {
+  await withContentionRetries(() => runTransaction(db, async (transaction) => {
     const sRef = sessionRef(sessionId);
     const eRef = entryRef(sessionId, entryId);
     const [session, entry] = await Promise.all([transaction.get(sRef), transaction.get(eRef)]);
     if (!session.exists() || !session.data().open) throw error('This session is closed.');
     if (!entry.exists() || entry.data().status !== 'confirmed') throw error('Only confirmed players can check in.');
-    if (entry.data().checkedIn) return;
-    transaction.update(eRef, { checkedIn: true, checkedInAt: serverTimestamp(), updatedAt: serverTimestamp() });
-    transaction.update(sRef, {
-      checkedInCount: (session.data().checkedInCount || 0) + 1, updatedAt: serverTimestamp(),
-    });
-  });
-  return { checkedIn: true };
+    const prior = entry.data();
+    if (prior.checkedIn && prior.sittingOut !== true) return;
+    const patch = {
+      checkedIn: true,
+      sittingOut: false,
+      updatedAt: serverTimestamp(),
+    };
+    if (!prior.checkedIn) patch.checkedInAt = serverTimestamp();
+    transaction.update(eRef, patch);
+    if (!prior.checkedIn) {
+      transaction.update(sRef, {
+        checkedInCount: increment(1), updatedAt: serverTimestamp(),
+      });
+    } else {
+      transaction.update(sRef, { updatedAt: serverTimestamp() });
+    }
+  }));
+  return { checkedIn: true, sittingOut: false };
 }
 
-export async function reservePlayer(sessionId, playerId) {
+export async function setEntrySittingOut(sessionId, entryId, sittingOut = true) {
   await ensureOrganizer();
+  await runTransaction(db, async (transaction) => {
+    const eRef = entryRef(sessionId, entryId);
+    const entry = await transaction.get(eRef);
+    if (!entry.exists() || entry.data().status !== 'confirmed') {
+      throw error('Only confirmed players can sit out.');
+    }
+    if (!entry.data().checkedIn) throw error('Check the player in before sitting them out.');
+    if (sittingOut && entry.data().playerId) {
+      const lock = await transaction.get(playerLockRef(sessionId, entry.data().playerId));
+      if (lock.exists()) throw error('Finish or replace this player\'s current game first.');
+    }
+    transaction.update(eRef, {
+      sittingOut: sittingOut === true,
+      updatedAt: serverTimestamp(),
+    });
+  });
+  return { sittingOut: sittingOut === true };
+}
+
+function assertPlayerControls(entryData, user, entryId) {
+  if (!entryData || entryData.status !== 'confirmed') {
+    throw error('Your spot must be confirmed before you can manage it.');
+  }
+  if (entryData.playClaimUid === user.uid) return;
+  if (entryData.hasPlayPin !== true && entryData.ownerUid === user.uid && entryId === user.uid) return;
+  throw error('Unlock this name with your PIN first.', 'permission-denied');
+}
+
+async function readMyPlayClaim(transaction, sessionId, user) {
+  const claim = await transaction.get(playClaimRef(sessionId, user.uid));
+  if (claim.exists()) return claim.data();
+  // Legacy same-phone signup: entry id is the anonymous uid and no PIN yet.
+  const legacy = await transaction.get(entryRef(sessionId, user.uid));
+  if (legacy.exists() && legacy.data().status === 'confirmed' &&
+      legacy.data().hasPlayPin !== true && legacy.data().ownerUid === user.uid) {
+    return { entryId: user.uid, playerId: legacy.data().playerId || null };
+  }
+  return null;
+}
+
+async function playerAttendanceTransaction(sessionId, entryId, mutate) {
+  const user = await ensurePublicAuth();
+  if (!user.isAnonymous) throw error('Open the player desk link to manage attendance.', 'auth-required');
+  const id = String(entryId || '').trim();
+  if (!id || id.includes('/')) throw error('Select your name first.');
+  await withContentionRetries(() => runTransaction(db, async (transaction) => {
+    const sRef = sessionRef(sessionId);
+    const eRef = entryRef(sessionId, id);
+    const [session, entry] = await Promise.all([transaction.get(sRef), transaction.get(eRef)]);
+    if (!session.exists() || !session.data().open) throw error('This session is closed.');
+    if (!entry.exists()) throw error('Reservation not found.', 'not-found');
+    assertPlayerControls(entry.data(), user, id);
+    mutate({ transaction, session, entry, sRef, eRef, user, entryId: id });
+  }));
+}
+
+/** Create a 4-digit PIN the first time you claim a confirmed name on /play. */
+export async function setPlayPin(sessionId, entryId, pin) {
+  const user = await ensurePublicAuth();
+  if (!user.isAnonymous) throw error('Open the player desk link to set a PIN.', 'auth-required');
+  const id = String(entryId || '').trim();
+  if (!id || id.includes('/')) throw error('Select your name first.');
+  const code = validPlayPin(pin);
+
+  // Do not read entryPins here — players cannot get that doc. Write the PIN,
+  // then the claim, then mirror the claim onto the entry.
+  const entrySnap = await getDoc(entryRef(sessionId, id));
+  if (!entrySnap.exists() || entrySnap.data().status !== 'confirmed') {
+    throw error('Only confirmed players can set a desk PIN.');
+  }
+  if (entrySnap.data().hasPlayPin === true) {
+    // Already committed — use unlock instead of create.
+    return unlockPlayPin(sessionId, id, code);
+  }
+  const playerId = entrySnap.data().playerId || null;
+  const existingClaim = await getDoc(playClaimRef(sessionId, user.uid));
+  if (existingClaim.exists() && existingClaim.data().entryId && existingClaim.data().entryId !== id) {
+    try {
+      await updateDoc(entryRef(sessionId, existingClaim.data().entryId), {
+        playClaimUid: null,
+        updatedAt: serverTimestamp(),
+      });
+    } catch {
+      // Previous claim may already be cleared.
+    }
+  }
+
+  try {
+    await setDoc(entryPinRef(sessionId, id), {
+      pin: code,
+      claimUid: user.uid,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (cause) {
+    const codeName = String(cause?.code || '');
+    // Pin doc may already exist from a partial earlier attempt — finish via unlock.
+    if (codeName.includes('permission-denied') || codeName.includes('already-exists')) {
+      return unlockPlayPin(sessionId, id, code);
+    }
+    throw cause;
+  }
+
+  await setDoc(playClaimRef(sessionId, user.uid), {
+    entryId: id,
+    playerId,
+    updatedAt: serverTimestamp(),
+  });
+  await updateDoc(entryRef(sessionId, id), {
+    hasPlayPin: true,
+    playClaimUid: user.uid,
+    updatedAt: serverTimestamp(),
+  });
+  return { hasPlayPin: true, entryId: id };
+}
+
+/** Unlock a name you already protected with a PIN on this phone. */
+export async function unlockPlayPin(sessionId, entryId, pin) {
+  const user = await ensurePublicAuth();
+  if (!user.isAnonymous) throw error('Open the player desk link to unlock your name.', 'auth-required');
+  const id = String(entryId || '').trim();
+  if (!id || id.includes('/')) throw error('Select your name first.');
+  const code = validPlayPin(pin);
+
+  const entrySnap = await getDoc(entryRef(sessionId, id));
+  if (!entrySnap.exists() || entrySnap.data().status !== 'confirmed') {
+    throw error('Only confirmed players can unlock the desk.');
+  }
+  const playerId = entrySnap.data().playerId || null;
+  const existingClaim = await getDoc(playClaimRef(sessionId, user.uid));
+  if (existingClaim.exists() && existingClaim.data().entryId && existingClaim.data().entryId !== id) {
+    try {
+      await updateDoc(entryRef(sessionId, existingClaim.data().entryId), {
+        playClaimUid: null,
+        updatedAt: serverTimestamp(),
+      });
+    } catch {
+      // Previous claim may already be cleared.
+    }
+  }
+
+  const hasPinFlag = entrySnap.data().hasPlayPin === true;
+  try {
+    if (hasPinFlag) {
+      // Prove the PIN by writing it back; rules compare against the stored value.
+      await updateDoc(entryPinRef(sessionId, id), {
+        pin: code,
+        claimUid: user.uid,
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      // Partial create / repair: pin may or may not exist yet.
+      await setDoc(entryPinRef(sessionId, id), {
+        pin: code,
+        claimUid: user.uid,
+        updatedAt: serverTimestamp(),
+      });
+    }
+  } catch (cause) {
+    if (String(cause?.code || '').includes('permission-denied') ||
+        String(cause?.code || '').includes('not-found')) {
+      throw error(hasPinFlag
+        ? 'That PIN is incorrect.'
+        : 'Could not save that PIN. Try again in a moment.', 'permission-denied');
+    }
+    throw cause;
+  }
+
+  await setDoc(playClaimRef(sessionId, user.uid), {
+    entryId: id,
+    playerId,
+    updatedAt: serverTimestamp(),
+  });
+  await updateDoc(entryRef(sessionId, id), {
+    hasPlayPin: true,
+    playClaimUid: user.uid,
+    updatedAt: serverTimestamp(),
+  });
+  return { unlocked: true, entryId: id, hasPlayPin: true };
+}
+
+/** Organizer: clear a forgotten desk PIN so the player can set a new one. */
+export async function clearPlayPin(sessionId, entryId) {
+  await ensureOrganizer();
+  const id = String(entryId || '').trim();
+  if (!id || id.includes('/')) throw error('Entry id is invalid.');
+  await runTransaction(db, async (transaction) => {
+    const eRef = entryRef(sessionId, id);
+    const pinRef = entryPinRef(sessionId, id);
+    const entry = await transaction.get(eRef);
+    if (!entry.exists()) throw error('Reservation not found.', 'not-found');
+    const claimUid = entry.data().playClaimUid || null;
+    transaction.delete(pinRef);
+    if (claimUid) transaction.delete(playClaimRef(sessionId, claimUid));
+    transaction.update(eRef, {
+      hasPlayPin: false,
+      playClaimUid: null,
+      updatedAt: serverTimestamp(),
+    });
+  });
+  return { cleared: true };
+}
+
+/** Player self-serve: arrive and join the waiting pool. */
+export async function playerCheckIn(sessionId, entryId) {
+  await playerAttendanceTransaction(sessionId, entryId, ({ transaction, entry, sRef, eRef }) => {
+    const prior = entry.data();
+    if (prior.checkedIn && prior.sittingOut !== true) return;
+    const patch = { checkedIn: true, sittingOut: false, updatedAt: serverTimestamp() };
+    if (!prior.checkedIn) patch.checkedInAt = serverTimestamp();
+    transaction.update(eRef, patch);
+    if (!prior.checkedIn) {
+      transaction.update(sRef, { checkedInCount: increment(1), updatedAt: serverTimestamp() });
+    }
+  });
+  return { checkedIn: true, sittingOut: false };
+}
+
+/** Player self-serve: stay reserved, skip court draws until resume. */
+export async function playerSitOut(sessionId, entryId) {
+  await playerAttendanceTransaction(sessionId, entryId, ({ transaction, entry, eRef }) => {
+    const prior = entry.data();
+    if (!prior.checkedIn) throw error('Check in first, then sit out when you need a break.');
+    transaction.update(eRef, { sittingOut: true, updatedAt: serverTimestamp() });
+  });
+  return { sittingOut: true };
+}
+
+/** Player self-serve: return to the waiting pool after sitting out. */
+export async function playerResume(sessionId, entryId) {
+  await playerAttendanceTransaction(sessionId, entryId, ({ transaction, entry, eRef }) => {
+    const prior = entry.data();
+    if (!prior.checkedIn) throw error('Check in first to rejoin the waiting pool.');
+    transaction.update(eRef, { sittingOut: false, updatedAt: serverTimestamp() });
+  });
+  return { sittingOut: false };
+}
+
+/** Player self-serve: leave for today and free the confirmed spot. */
+export async function playerLeaveToday(sessionId, entryId) {
+  const user = await ensurePublicAuth();
+  if (!user.isAnonymous) throw error('Open the player desk link to leave the session.', 'auth-required');
+  return closeEntryAsClaimed(sessionId, entryId, user);
+}
+
+async function closeEntryAsClaimed(sessionId, entryId, user) {
+  const id = String(entryId || '').trim();
+  const freed = await runTransaction(db, async (transaction) => {
+    const sRef = sessionRef(sessionId);
+    const eRef = entryRef(sessionId, id);
+    const [session, entry] = await Promise.all([transaction.get(sRef), transaction.get(eRef)]);
+    if (!session.exists() || !entry.exists()) throw error('Reservation not found.', 'not-found');
+    const prior = entry.data();
+    assertPlayerControls(prior, user, id);
+    const claim = prior.playerId ? claimRef(sessionId, prior.playerId) : null;
+    const lock = prior.playerId ? await transaction.get(playerLockRef(sessionId, prior.playerId)) : null;
+    if (lock?.exists()) throw error('Finish your current game before leaving.');
+    const existingClaim = claim ? await transaction.get(claim) : null;
+    let partnerEntry = null;
+    if (prior.partnerPlayerId) {
+      const partnerClaim = await transaction.get(claimRef(sessionId, prior.partnerPlayerId));
+      if (partnerClaim.exists()) {
+        partnerEntry = await transaction.get(entryRef(sessionId, partnerClaim.data().entryId));
+      }
+    }
+    transaction.update(eRef, {
+      status: 'checked_out',
+      checkedIn: false,
+      sittingOut: false,
+      checkedOutAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      partnerPlayerId: null,
+      partnerRequestToPlayerId: null,
+      partnerRequestGames: null,
+      partnerGamesRemaining: null,
+      playClaimUid: null,
+    });
+    transaction.delete(playClaimRef(sessionId, user.uid));
+    if (partnerEntry?.exists() && partnerEntry.data().partnerPlayerId === prior.playerId) {
+      transaction.update(partnerEntry.ref, {
+        partnerPlayerId: null,
+        partnerRequestGames: null,
+        partnerGamesRemaining: null,
+        updatedAt: serverTimestamp(),
+      });
+    }
+    if (existingClaim?.exists() && existingClaim.data().entryId === id) transaction.delete(claim);
+    const sessionPatch = {
+      confirmedCount: Math.max(0, (session.data().confirmedCount || 0) - 1),
+      updatedAt: serverTimestamp(),
+    };
+    if (prior.checkedIn) sessionPatch.checkedInCount = increment(-1);
+    transaction.update(sRef, sessionPatch);
+    return true;
+  });
+  if (freed) await promoteOldest(sessionId);
+  return { status: 'checked_out' };
+}
+
+async function findConfirmedEntryByPlayerId(transaction, sessionId, playerId) {
+  const claim = await transaction.get(claimRef(sessionId, playerId));
+  if (!claim.exists()) return null;
+  const entry = await transaction.get(entryRef(sessionId, claim.data().entryId));
+  if (!entry.exists() || entry.data().status !== 'confirmed') return null;
+  return entry;
+}
+
+async function requireClaimedEntry(transaction, sessionId, user) {
+  const mine = await readMyPlayClaim(transaction, sessionId, user);
+  if (!mine?.entryId) throw error('Unlock your name with a PIN first.');
+  const entry = await transaction.get(entryRef(sessionId, mine.entryId));
+  if (!entry.exists() || entry.data().status !== 'confirmed') {
+    throw error('Your spot must be confirmed before you can pair.');
+  }
+  assertPlayerControls(entry.data(), user, mine.entryId);
+  return { entry, entryId: mine.entryId, playerId: entry.data().playerId || mine.playerId || null };
+}
+
+/** Player desk: ask another confirmed player to lock as doubles partners. Pending stays solo. */
+export async function requestPartner(sessionId, partnerPlayerId, gamesTogether = null) {
+  const partnerId = idOfPlayer(partnerPlayerId);
+  const games = normalizePartnerGames(gamesTogether);
+  const user = await ensurePublicAuth();
+  if (!user.isAnonymous) throw error('Open the player desk link to manage pairing.', 'auth-required');
+  await withContentionRetries(() => runTransaction(db, async (transaction) => {
+    const { entry, entryId, playerId } = await requireClaimedEntry(transaction, sessionId, user);
+    const prior = entry.data();
+    if (!playerId) throw error('Pairing needs an approved player profile.');
+    if (prior.partnerPlayerId) throw error('Unpair your current partner before requesting someone else.');
+    if (partnerId === playerId) throw error('You cannot pair with yourself.');
+    const partner = await findConfirmedEntryByPlayerId(transaction, sessionId, partnerId);
+    if (!partner) throw error('That player is not confirmed for today.');
+    if (partner.data().partnerPlayerId) throw error('That player is already paired.');
+    if (partner.data().sittingOut === true || prior.sittingOut === true) {
+      throw error('Both players need to be available (not sitting out) to pair.');
+    }
+    transaction.update(entryRef(sessionId, entryId), {
+      partnerRequestToPlayerId: partnerId,
+      partnerRequestGames: games,
+      partnerGamesRemaining: null,
+      updatedAt: serverTimestamp(),
+    });
+  }));
+  return { partnerRequestToPlayerId: partnerId, partnerRequestGames: games };
+}
+
+/** Player desk: cancel your outbound pair request. */
+export async function cancelPartnerRequest(sessionId) {
+  const user = await ensurePublicAuth();
+  await runTransaction(db, async (transaction) => {
+    const { entryId } = await requireClaimedEntry(transaction, sessionId, user);
+    transaction.update(entryRef(sessionId, entryId), {
+      partnerRequestToPlayerId: null,
+      partnerRequestGames: null,
+      updatedAt: serverTimestamp(),
+    });
+  });
+  return { partnerRequestToPlayerId: null };
+}
+
+/** Player desk: approve an inbound pair request and lock both sides. */
+export async function approvePartnerRequest(sessionId, requesterEntryId) {
+  const user = await ensurePublicAuth();
+  if (!user.isAnonymous) throw error('Open the player desk link to manage pairing.', 'auth-required');
+  const requesterId = String(requesterEntryId || '').trim();
+  if (!requesterId || requesterId.includes('/')) throw error('Request is invalid.');
+  await withContentionRetries(() => runTransaction(db, async (transaction) => {
+    const { entry, entryId, playerId } = await requireClaimedEntry(transaction, sessionId, user);
+    const theirRef = entryRef(sessionId, requesterId);
+    const theirs = await transaction.get(theirRef);
+    if (!theirs.exists() || theirs.data().status !== 'confirmed') throw error('That request is no longer available.');
+    const me = entry.data();
+    const them = theirs.data();
+    if (!playerId || !them.playerId) throw error('Both players need approved profiles to pair.');
+    if (them.partnerRequestToPlayerId !== playerId) {
+      throw error('That pair request was cancelled or already handled.');
+    }
+    if (me.partnerPlayerId || them.partnerPlayerId) {
+      throw error('One of you is already paired. Decline and stay solo, or unpair first.');
+    }
+    const games = normalizePartnerGames(them.partnerRequestGames);
+    transaction.update(theirRef, {
+      partnerPlayerId: playerId,
+      partnerRequestToPlayerId: null,
+      partnerRequestGames: null,
+      partnerGamesRemaining: games,
+      updatedAt: serverTimestamp(),
+    });
+    transaction.update(entryRef(sessionId, entryId), {
+      partnerPlayerId: them.playerId,
+      partnerRequestToPlayerId: null,
+      partnerRequestGames: null,
+      partnerGamesRemaining: games,
+      updatedAt: serverTimestamp(),
+    });
+  }));
+  return { paired: true };
+}
+
+/** Player desk: decline an inbound pair request; both stay solo. */
+export async function declinePartnerRequest(sessionId, requesterEntryId) {
+  const user = await ensurePublicAuth();
+  if (!user.isAnonymous) throw error('Open the player desk link to manage pairing.', 'auth-required');
+  const requesterId = String(requesterEntryId || '').trim();
+  if (!requesterId || requesterId.includes('/')) throw error('Request is invalid.');
+  await runTransaction(db, async (transaction) => {
+    const { playerId } = await requireClaimedEntry(transaction, sessionId, user);
+    const theirRef = entryRef(sessionId, requesterId);
+    const theirs = await transaction.get(theirRef);
+    if (!theirs.exists()) return;
+    if (theirs.data().partnerRequestToPlayerId !== playerId) return;
+    transaction.update(theirRef, {
+      partnerRequestToPlayerId: null,
+      partnerRequestGames: null,
+      updatedAt: serverTimestamp(),
+    });
+  });
+  return { declined: true };
+}
+
+/** Player desk: clear a locked doubles pair; both return to solo for draws. */
+export async function clearMyPartner(sessionId) {
+  const user = await ensurePublicAuth();
+  if (!user.isAnonymous) throw error('Open the player desk link to manage pairing.', 'auth-required');
+  await withContentionRetries(() => runTransaction(db, async (transaction) => {
+    const { entry, entryId, playerId } = await requireClaimedEntry(transaction, sessionId, user);
+    const me = entry.data();
+    if (!me.partnerPlayerId) {
+      transaction.update(entryRef(sessionId, entryId), {
+        partnerRequestToPlayerId: null,
+        partnerRequestGames: null,
+        partnerGamesRemaining: null,
+        updatedAt: serverTimestamp(),
+      });
+      return;
+    }
+    const partner = await findConfirmedEntryByPlayerId(transaction, sessionId, me.partnerPlayerId);
+    transaction.update(entryRef(sessionId, entryId), {
+      partnerPlayerId: null,
+      partnerRequestToPlayerId: null,
+      partnerRequestGames: null,
+      partnerGamesRemaining: null,
+      updatedAt: serverTimestamp(),
+    });
+    if (partner?.exists() && partner.data().partnerPlayerId === playerId) {
+      transaction.update(partner.ref, {
+        partnerPlayerId: null,
+        partnerRequestGames: null,
+        partnerGamesRemaining: null,
+        updatedAt: serverTimestamp(),
+      });
+    }
+  }));
+  return { partnerPlayerId: null };
+}
+
+/** Organizer: soft-delete a duplicate directory player (keeps history refs intact). */
+export async function deletePlayer(playerId) {
+  await ensureOrganizer();
+  const id = idOfPlayer(playerId);
+  await runTransaction(db, async (transaction) => {
+    const reference = playerRef(id);
+    const player = await transaction.get(reference);
+    if (!player.exists()) throw error('Player not found.', 'not-found');
+    transaction.update(reference, { active: false, updatedAt: serverTimestamp() });
+    transaction.delete(directoryRef(id));
+  });
+  return { deleted: true };
+}
+
+export async function reservePlayer(sessionId, playerId, options = {}) {
+  await ensureOrganizer();
+  const checkIn = options.checkIn === true;
   const id = doc(collection(db, 'sessions', sessionId, 'entries')).id;
-  const priorEntry = await previousClosedEntry(sessionId, playerId);
-  const result = await runTransaction(db, async (transaction) => {
+  const result = await withContentionRetries(() => runTransaction(db, async (transaction) => {
     const sRef = sessionRef(sessionId);
     const pRef = playerRef(playerId);
     const claim = claimRef(sessionId, playerId);
@@ -663,86 +1558,125 @@ export async function reservePlayer(sessionId, playerId) {
     if (!session.exists() || !session.data().open) throw error('This session is closed.');
     if (!player.exists() || player.data().active !== true) throw error('Player not found.');
     if (existingClaim.exists()) throw error('This player already has a reservation or waitlist place.', 'already-exists');
-    const prior = priorEntry ? await transaction.get(priorEntry.ref) : null;
-    const summary = prior?.exists() && ['checked_out', 'removed'].includes(prior.data().status)
-      ? matchSummary(prior) : matchSummary(null);
-    const confirmed = session.data().confirmedCount < session.data().capacity;
-    const status = confirmed ? 'confirmed' : 'waitlisted';
+    const hasOpenSpot = session.data().confirmedCount < session.data().capacity;
+    if (checkIn && !hasOpenSpot) {
+      throw error('No open confirmed spots left. Reserve to the waitlist instead.');
+    }
+    const status = hasOpenSpot ? 'confirmed' : 'waitlisted';
+    const shouldCheckIn = checkIn && status === 'confirmed';
     transaction.set(entryRef(sessionId, id), {
       sessionId, ownerUid: null, playerId,
       name: player.data().name, skillLevel: player.data().skillLevel,
       division: player.data().division || 'unspecified',
       photoData: player.data().photoData || null,
-      ...summary,
-      status, checkedIn: false, source: 'organizer',
+      status, checkedIn: shouldCheckIn, source: 'organizer',
       createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
       approvedAt: serverTimestamp(), reviewedAt: serverTimestamp(),
-      checkedInAt: null, checkedOutAt: null,
+      checkedInAt: shouldCheckIn ? serverTimestamp() : null, checkedOutAt: null,
     });
     transaction.set(claim, { entryId: id, createdAt: serverTimestamp() });
-    transaction.update(sRef, {
-      confirmedCount: session.data().confirmedCount + (confirmed ? 1 : 0),
-      waitlistCount: (session.data().waitlistCount || 0) + (confirmed ? 0 : 1),
-      updatedAt: serverTimestamp(),
-    });
-    return { id, status };
-  });
+    const sessionPatch = { updatedAt: serverTimestamp() };
+    if (status === 'confirmed') sessionPatch.confirmedCount = increment(1);
+    else sessionPatch.waitlistCount = increment(1);
+    if (shouldCheckIn) sessionPatch.checkedInCount = increment(1);
+    transaction.update(sRef, sessionPatch);
+    return { id, status, checkedIn: shouldCheckIn };
+  }));
   return { entry: result };
 }
 
-export async function createAndReservePlayer({ sessionId, name, skillLevel, division = 'unspecified', photoData = null }) {
+/** Create a new directory player and optionally put them on today's roster. */
+export async function createAndReservePlayer(sessionId, {
+  name,
+  skillLevel,
+  division = 'unspecified',
+  reserve = true,
+  checkIn = false,
+} = {}) {
   await ensureOrganizer();
   const playerName = validName(name);
   const skill = validSkill(skillLevel);
-  const playerDivision = validDivision(division);
-  const photo = validPhoto(photoData);
-  const pRef = doc(collection(db, 'players'));
-  const eRef = doc(collection(db, 'sessions', sessionId, 'entries'));
-  const result = await runTransaction(db, async (transaction) => {
+  const gender = validDivision(division);
+  const playerDoc = doc(collection(db, 'players'));
+  const entryId = doc(collection(db, 'sessions', sessionId, 'entries')).id;
+
+  const result = await withContentionRetries(() => runTransaction(db, async (transaction) => {
     const sRef = sessionRef(sessionId);
     const session = await transaction.get(sRef);
-    if (!session.exists() || !session.data().open) throw error('This session is closed.');
-    const confirmed = session.data().confirmedCount < session.data().capacity;
-    const status = confirmed ? 'confirmed' : 'waitlisted';
+    if (!session.exists() || session.data().open !== true) throw error('This session is closed.');
+
     const profile = {
-      name: playerName, nameLower: playerName.toLocaleLowerCase(),
-      searchPrefixes: searchPrefixes(playerName), skillLevel: skill,
-      division: playerDivision, photoData: photo, active: true,
-      wins: 0, losses: 0,
-      createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
-    };
-    transaction.set(pRef, profile);
-    transaction.set(directoryRef(pRef.id), {
-      name: profile.name, nameLower: profile.nameLower,
-      searchPrefixes: profile.searchPrefixes,
-      skillLevel: skill, division: playerDivision,
-      photoData: photo, active: true,
-    });
-    transaction.set(eRef, {
-      sessionId, ownerUid: null, playerId: pRef.id,
-      name: playerName, skillLevel: skill, division: playerDivision,
-      photoData: photo, wins: 0, losses: 0, recentMatches: [],
-      status, checkedIn: false, source: 'organizer',
-      createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
-      approvedAt: serverTimestamp(), reviewedAt: serverTimestamp(),
-      checkedInAt: null, checkedOutAt: null,
-    });
-    transaction.set(claimRef(sessionId, pRef.id), {
-      entryId: eRef.id, createdAt: serverTimestamp(),
-    });
-    transaction.update(sRef, {
-      confirmedCount: session.data().confirmedCount + (confirmed ? 1 : 0),
-      waitlistCount: (session.data().waitlistCount || 0) + (confirmed ? 0 : 1),
+      name: playerName,
+      nameLower: playerName.toLocaleLowerCase(),
+      searchPrefixes: searchPrefixes(playerName),
+      skillLevel: skill,
+      division: gender,
+      photoData: null,
+      active: true,
+      wins: 0,
+      losses: 0,
+      createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
+      source: 'organizer',
+    };
+    transaction.set(playerDoc, profile);
+    transaction.set(directoryRef(playerDoc.id), directoryPayload(profile));
+
+    if (!reserve) {
+      return { playerId: playerDoc.id, entry: null };
+    }
+
+    const hasOpenSpot = session.data().confirmedCount < session.data().capacity;
+    if (checkIn && !hasOpenSpot) {
+      throw error('No open confirmed spots left. Reserve to the waitlist instead.');
+    }
+    const status = hasOpenSpot ? 'confirmed' : 'waitlisted';
+    const shouldCheckIn = checkIn && status === 'confirmed';
+    transaction.set(entryRef(sessionId, entryId), {
+      sessionId,
+      ownerUid: null,
+      playerId: playerDoc.id,
+      name: playerName,
+      skillLevel: skill,
+      division: gender,
+      photoData: null,
+      status,
+      checkedIn: shouldCheckIn,
+      source: 'organizer',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      approvedAt: serverTimestamp(),
+      reviewedAt: serverTimestamp(),
+      checkedInAt: shouldCheckIn ? serverTimestamp() : null,
+      checkedOutAt: null,
     });
-    return { id: eRef.id, status };
-  });
-  return { playerId: pRef.id, entry: result };
+    transaction.set(claimRef(sessionId, playerDoc.id), {
+      entryId,
+      createdAt: serverTimestamp(),
+    });
+    const sessionPatch = { updatedAt: serverTimestamp() };
+    if (status === 'confirmed') sessionPatch.confirmedCount = increment(1);
+    else sessionPatch.waitlistCount = increment(1);
+    if (shouldCheckIn) sessionPatch.checkedInCount = increment(1);
+    transaction.update(sRef, sessionPatch);
+    return {
+      playerId: playerDoc.id,
+      entry: { id: entryId, status, checkedIn: shouldCheckIn },
+    };
+  }));
+
+  return result;
 }
 
 export async function updatePlayer(playerId, changes, sessionId = null) {
   await ensureOrganizer();
   const patch = { updatedAt: serverTimestamp() };
+  if (Object.prototype.hasOwnProperty.call(changes, 'name')) {
+    const name = validName(changes.name);
+    patch.name = name;
+    patch.nameLower = name.toLocaleLowerCase();
+    patch.searchPrefixes = searchPrefixes(name);
+  }
   if (Object.prototype.hasOwnProperty.call(changes, 'skillLevel')) {
     patch.skillLevel = validSkill(changes.skillLevel);
   }
@@ -760,19 +1694,15 @@ export async function updatePlayer(playerId, changes, sessionId = null) {
       if (claim.exists()) entry = await transaction.get(entryRef(sessionId, claim.data().entryId));
     }
     transaction.update(reference, patch);
-    transaction.set(directoryRef(playerId), {
-      name: player.data().name,
-      nameLower: player.data().nameLower || player.data().name.toLocaleLowerCase(),
-      searchPrefixes: searchPrefixes(player.data().name),
-      skillLevel: patch.skillLevel || player.data().skillLevel,
-      division: patch.division || player.data().division || 'unspecified',
-      photoData: player.data().photoData || null,
-      active: player.data().active !== false,
-    }, { merge: true });
+    transaction.set(directoryRef(playerId), directoryPayload(player.data(), patch), { merge: true });
     // Court eligibility is read from the active session entry. Keep that
     // snapshot aligned with an organizer's profile edit for this session.
     if (entry?.exists() && ['confirmed', 'waitlisted'].includes(entry.data().status)) {
-      transaction.update(entry.ref, patch);
+      const entryPatch = { updatedAt: serverTimestamp() };
+      if (patch.name) entryPatch.name = patch.name;
+      if (patch.skillLevel) entryPatch.skillLevel = patch.skillLevel;
+      if (patch.division) entryPatch.division = patch.division;
+      transaction.update(entry.ref, entryPatch);
     }
   });
   const player = await getDoc(reference);
@@ -792,7 +1722,7 @@ export async function updateSession(sessionId, { capacity }) {
     }
     transaction.update(sRef, { capacity: size, updatedAt: serverTimestamp() });
   });
-  await reconcileWaitlist(sessionId);
+  await fillOpenSpots(sessionId);
   return { session: normalizedSession(await getDoc(sessionRef(sessionId))) };
 }
 

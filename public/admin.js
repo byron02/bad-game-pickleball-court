@@ -1,7 +1,9 @@
 import {
   getAdminDashboard, watchAdminDashboard, signInOrganizerWithGoogle,
   signOutOrganizer, approveEntry, rejectEntry, removeEntry, checkInEntry, checkOutEntry,
-  reservePlayer, createAndReservePlayer, updatePlayer, updateSession, resetSession, searchAdminPlayers,
+  reservePlayer, updatePlayer, updateSession, resetSession, setEntryPartner,
+  createAndReservePlayer, getCurrentUser, listOrganizers, addOrganizer, removeOrganizer,
+  setEntrySittingOut, clearPlayPin, deletePlayer,
 } from '../src/firebaseStore.js';
 import { initCourtsUI } from './courts-ui.js';
 
@@ -9,90 +11,208 @@ const $ = (id) => document.getElementById(id);
 const ui = {
   alert: $('adminAlert'), loading: $('loadingPanel'), loadingMessage: $('loadingMessage'),
   reloadPage: $('reloadPageButton'), auth: $('authPanel'), dashboard: $('dashboard'),
-  googleSignIn: $('googleSignInButton'), signOut: $('signOutButton'),
+  googleSignIn: $('googleSignInButton'), signOut: $('signOutButton'), openSettings: $('openSettingsButton'),
   sessionDate: $('sessionDateInput'), capacityInput: $('capacityInput'), settingsForm: $('settingsForm'),
-  dashboardTitle: $('dashboardTitle'), settingsTitle: $('settingsTitle'),
   confirmed: $('adminConfirmed'), capacity: $('adminCapacity'), fill: $('adminCapacityFill'), availability: $('adminAvailability'),
   dateLabel: $('adminDateLabel'), checkedIn: $('checkedInMetric'), pending: $('pendingMetric'), waitlist: $('waitlistMetric'), open: $('openMetric'),
+  dayStrip: $('dayStrip'),
   pendingCount: $('pendingCountLabel'), pendingList: $('pendingList'), confirmedList: $('confirmedList'),
-  waitlistCount: $('waitlistCountLabel'), waitlistList: $('waitlistList'),
-  directorySearch: $('directorySearch'), directorySearchStatus: $('directorySearchStatus'), directoryList: $('directoryList'), shareLink: $('shareLinkText'),
-  addPlayerButton: $('addPlayerButton'), addPlayerDialog: $('addPlayerDialog'), addPlayerForm: $('addPlayerForm'),
-  addPlayerName: $('addPlayerName'), addPlayerSkill: $('addPlayerSkill'), addPlayerDivision: $('addPlayerDivision'),
-  addPlayerPhoto: $('addPlayerPhoto'), addPlayerPhotoPreview: $('addPlayerPhotoPreview'), saveAddPlayer: $('saveAddPlayer'),
+  waitlistCount: $('waitlistCountLabel'), waitlistList: $('waitlistList'), waitlistBlock: $('waitlistBlock'),
+  todayCount: $('todayCountLabel'), todaySpotsNote: $('todaySpotsNote'),
+  todayPlayersList: $('todayPlayersList'), todayWaitlistList: $('todayWaitlistList'),
+  todayWaitlistCount: $('todayWaitlistCountLabel'), gotoPlayers: $('gotoPlayersButton'),
+  rosterSearch: $('rosterSearch'), rosterFillList: $('rosterFillList'), fillSpotsNote: $('fillSpotsNote'),
+  fillPager: $('fillPager'), waitlistPager: $('waitlistPager'),
+  directoryPager: $('directoryPager'),
+  confirmedViewGrid: $('confirmedViewGrid'), confirmedViewList: $('confirmedViewList'),
+  confirmedSearch: $('confirmedSearch'),
+  directorySearch: $('directorySearch'), directoryList: $('directoryList'), shareLink: $('shareLinkText'),
+  playLink: $('playLinkText'), copyPlayLink: $('copyPlayLinkButton'),
   copyLink: $('copyLinkButton'), copyLinkSecondary: $('copyLinkSecondary'), refresh: $('refreshButton'),
   reset: $('resetButton'), resetDialog: $('resetDialog'), resetForm: $('resetForm'), resetConfirm: $('resetConfirm'), cancelReset: $('cancelReset'),
-  resetTitle: $('resetTitle'), resetDescription: $('resetDescription'),
+  navPendingPill: $('navPendingPill'), mobilePendingPill: $('mobilePendingPill'),
+  organizerAccountEmail: $('organizerAccountEmail'), organizerAddForm: $('organizerAddForm'),
+  organizerAddEmail: $('organizerAddEmail'), organizerList: $('organizerList'),
 };
 
 let session = null;
 let entries = [];
-let directoryPlayers = [];
-let directoryHasMore = false;
-let directorySearchTimer = null;
-let directorySearchSequence = 0;
+let players = [];
 let selectedDate = null;
 let unsubscribeDashboard = null;
 let activeShareLink = '';
-let viewRequest = 0;
-let activeView = 0;
-let capacityDirty = false;
-const DASHBOARD_LOAD_TIMEOUT_MS = 25000;
+let activePlayLink = '';
+let currentView = 'overview';
+let currentOrganizerUid = null;
+const pendingSkillByEntry = new Map();
+const pendingNameByEntry = new Map();
+const SKILL_LEVELS = ['beginner', 'intermediate', 'advanced'];
+const VIEWS = ['overview', 'requests', 'roster', 'directory', 'courts', 'settings'];
+const PAGE_SIZE = 12;
+const listPages = { waitlist: 1, fill: 1, directory: 1 };
 
-function withDashboardTimeout(operation) {
-  let timer;
-  return Promise.race([
-    operation,
-    new Promise((_, reject) => {
-      timer = setTimeout(() => {
-        const failure = new Error('Connecting to Firebase took too long. Check your connection and reload the page.');
-        failure.code = 'dashboard-timeout';
-        reject(failure);
-      }, DASHBOARD_LOAD_TIMEOUT_MS);
-    }),
-  ]).finally(() => clearTimeout(timer));
-}
-let addPhotoPreviewUrl = null;
-
-function showAlert(message, type = 'error', anchor = null) {
-  for (const status of document.querySelectorAll('.context-status')) status.remove();
-  const dialog = document.querySelector('dialog[open]');
-  const panel = dialog || anchor?.closest('.panel');
-  if (panel) {
-    const status = node('p', 'context-status', message);
-    status.classList.toggle('success', type === 'success');
-    status.setAttribute('role', type === 'success' ? 'status' : 'alert');
-    const insertionPoint = dialog ? panel.querySelector('.dialog-actions') : panel.querySelector('.panel-head');
-    if (dialog) insertionPoint?.before(status);
-    else insertionPoint?.after(status);
-    if (!insertionPoint) panel.append(status);
+function readConfirmedLayout() {
+  try {
+    return localStorage.getItem('confirmedLayout') === 'list' ? 'list' : 'grid';
+  } catch {
+    return 'grid';
   }
+}
+
+function writeConfirmedLayout(layout) {
+  try {
+    localStorage.setItem('confirmedLayout', layout);
+  } catch {
+    // Private browsing can block storage; keep the in-memory choice only.
+  }
+}
+
+let confirmedLayout = readConfirmedLayout();
+
+function applyConfirmedLayout() {
+  if (!ui.confirmedList) return;
+  ui.confirmedList.dataset.layout = confirmedLayout;
+  if (ui.confirmedViewGrid) ui.confirmedViewGrid.setAttribute('aria-pressed', confirmedLayout === 'grid' ? 'true' : 'false');
+  if (ui.confirmedViewList) ui.confirmedViewList.setAttribute('aria-pressed', confirmedLayout === 'list' ? 'true' : 'false');
+}
+
+function setConfirmedLayout(layout) {
+  confirmedLayout = layout === 'list' ? 'list' : 'grid';
+  writeConfirmedLayout(confirmedLayout);
+  applyConfirmedLayout();
+}
+
+function showAlert(message, type = 'error') {
   ui.alert.textContent = message;
   ui.alert.classList.toggle('success', type === 'success');
-  ui.alert.setAttribute('role', panel ? 'presentation' : type === 'success' ? 'status' : 'alert');
-  ui.alert.setAttribute('aria-hidden', String(Boolean(panel)));
-  ui.alert.hidden = Boolean(panel);
+  ui.alert.hidden = false;
 }
 
 function clearAlert() {
   ui.alert.hidden = true;
   ui.alert.textContent = '';
-  for (const status of document.querySelectorAll('.context-status')) status.remove();
 }
 
 function friendlyError(error) {
   const code = error?.code || '';
   if (code === 'organizer-not-approved') return error.message;
+  if (code === 'timeout') return error.message || 'Connection timed out. Reload and try again.';
+  if (code === 'already-exists') return error.message;
   if (code.includes('permission-denied')) return 'The database denied this action. Refresh the page and try again.';
+  if (code.includes('failed-precondition') || code.includes('aborted')) {
+    return 'Someone else updated the session at the same time. Tap Refresh, then try again.';
+  }
   if (code.includes('wrong-password') || code.includes('invalid-credential')) return 'Email or password was not accepted.';
-  if (code.includes('network')) return 'Network error. Check your connection and try again.';
+  if (code.includes('network') || code.includes('unavailable')) return 'Network error. Check your connection and try again.';
   return error?.message || 'Something went wrong. Please try again.';
 }
 
+function withTimeout(promise, ms, message) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const err = new Error(message);
+      err.code = 'timeout';
+      reject(err);
+    }, ms);
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
+function manilaToday() {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date());
+}
+
+function shiftDate(ymd, days) {
+  const [year, month, day] = ymd.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function dayChipLabel(ymd, today = manilaToday()) {
+  if (ymd === today) return 'Today';
+  if (ymd === shiftDate(today, 1)) return 'Tomorrow';
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'UTC', weekday: 'short',
+  }).format(new Date(`${ymd}T12:00:00Z`));
+}
+
+function dayChipDate(ymd) {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'UTC', month: 'short', day: 'numeric',
+  }).format(new Date(`${ymd}T12:00:00Z`));
+}
+
+function upcomingDates(count = 7) {
+  const today = manilaToday();
+  return Array.from({ length: count }, (_, index) => shiftDate(today, index));
+}
+
+function renderDayStrip(activeDate = selectedDate || manilaToday()) {
+  if (!ui.dayStrip) return;
+  const today = manilaToday();
+  ui.dayStrip.replaceChildren();
+  for (const date of upcomingDates(7)) {
+    const chip = node('button', 'day-chip');
+    chip.type = 'button';
+    chip.dataset.date = date;
+    chip.setAttribute('role', 'tab');
+    chip.setAttribute('aria-selected', date === activeDate ? 'true' : 'false');
+    chip.append(node('span', 'day-chip-label', dayChipLabel(date, today)));
+    chip.append(node('span', 'day-chip-date', dayChipDate(date)));
+    chip.append(node('span', 'day-chip-sub', date === today ? 'Current day' : 'Open this day'));
+    ui.dayStrip.append(chip);
+  }
+}
+
+async function switchSessionDate(date) {
+  if (!date || date === selectedDate) {
+    renderDayStrip(date);
+    return;
+  }
+  showAlert('Opening that day’s session…', 'success');
+  await beginDashboard(date);
+  showAlert(`Now managing ${dayChipLabel(date)} · ${dayChipDate(date)}.`, 'success');
+}
+
 function formatDate(value) {
-  if (!value) return 'Today';
-  const date = new Date(`${value}T12:00:00`);
-  return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }).format(date);
+  if (!value) return '—';
+  const today = manilaToday();
+  const label = dayChipLabel(value, today);
+  const pretty = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'UTC', weekday: 'long', month: 'long', day: 'numeric',
+  }).format(new Date(`${value}T12:00:00Z`));
+  return label === 'Today' || label === 'Tomorrow' ? `${label} · ${pretty}` : pretty;
+}
+
+function formatSignupAt(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const sameDay = date.toDateString() === new Date().toDateString();
+  const time = new Intl.DateTimeFormat(undefined, {
+    hour: 'numeric', minute: '2-digit',
+  }).format(date);
+  if (sameDay) return `Signed up ${time}`;
+  return `Signed up ${new Intl.DateTimeFormat(undefined, {
+    month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+  }).format(date)}`;
+}
+
+function byPlayerName(a, b) {
+  return String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' })
+    || String(a.createdAt || '').localeCompare(String(b.createdAt || ''));
+}
+
+function matchesPlayerSearch(person, search) {
+  if (!search) return true;
+  const text = `${person.name || ''} ${person.skillLevel || ''} ${person.division || ''}`.toLowerCase();
+  return text.includes(search);
 }
 
 function initials(name) {
@@ -104,27 +224,6 @@ function photoSource(value) {
   if (/^data:image\/(?:jpeg|png|webp);base64,/i.test(value)) return value;
   if (/^https:\/\//i.test(value)) return value;
   return null;
-}
-
-async function compressPlayerPhoto(file) {
-  if (!file) return null;
-  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) throw new Error('Choose a JPG, PNG, or WebP photo.');
-  if (file.size > 5 * 1024 * 1024) throw new Error('Choose a photo smaller than 5 MB.');
-  const image = await createImageBitmap(file);
-  const scale = Math.min(1, 512 / Math.max(image.width, image.height));
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.max(1, Math.round(image.width * scale));
-  canvas.height = Math.max(1, Math.round(image.height * scale));
-  const context = canvas.getContext('2d');
-  context.fillStyle = '#fff';
-  context.fillRect(0, 0, canvas.width, canvas.height);
-  context.drawImage(image, 0, 0, canvas.width, canvas.height);
-  image.close?.();
-  for (const quality of [.78, .65, .52, .4, .3]) {
-    const data = canvas.toDataURL('image/jpeg', quality);
-    if (data.length <= 115_000) return data;
-  }
-  throw new Error('This photo is too detailed to upload. Try a smaller photo.');
 }
 
 function node(tag, className, text) {
@@ -166,6 +265,204 @@ function recordLabel(player) {
   return `${wins} ${wins === 1 ? 'win' : 'wins'} · ${losses} ${losses === 1 ? 'loss' : 'losses'}`;
 }
 
+function nameInput(entryId, current) {
+  const label = node('label', 'entry-skill');
+  label.append(node('span', '', 'Correct name'));
+  const input = document.createElement('input');
+  input.className = 'input entry-skill-select';
+  input.type = 'text';
+  input.maxLength = 60;
+  input.required = true;
+  input.dataset.nameFor = entryId;
+  input.setAttribute('aria-label', 'Correct player name');
+  input.value = pendingNameByEntry.get(entryId) || current || '';
+  input.addEventListener('input', () => {
+    pendingNameByEntry.set(entryId, input.value);
+  });
+  label.append(input);
+  return label;
+}
+
+function skillSelect(entryId, current) {
+  const label = node('label', 'entry-skill');
+  label.append(node('span', '', 'Set skill level'));
+  const select = document.createElement('select');
+  select.className = 'input entry-skill-select';
+  select.dataset.skillFor = entryId;
+  select.setAttribute('aria-label', 'Set skill level');
+  const selected = pendingSkillByEntry.get(entryId) || current || 'beginner';
+  for (const level of SKILL_LEVELS) {
+    const option = document.createElement('option');
+    option.value = level;
+    option.textContent = level.charAt(0).toUpperCase() + level.slice(1);
+    if (level === selected) option.selected = true;
+    select.append(option);
+  }
+  select.addEventListener('change', () => {
+    pendingSkillByEntry.set(entryId, select.value);
+  });
+  label.append(select);
+  return label;
+}
+
+function showView(name, { updateHash = true } = {}) {
+  const view = VIEWS.includes(name) ? name : 'overview';
+  currentView = view;
+  document.querySelectorAll('.admin-view').forEach((section) => {
+    section.hidden = section.dataset.view !== view;
+  });
+  document.querySelectorAll('.web-nav a[data-view], .mobile-nav button[data-view]').forEach((item) => {
+    item.classList.toggle('current', item.dataset.view === view);
+  });
+  if (ui.openSettings) ui.openSettings.classList.toggle('current', view === 'settings');
+  if (updateHash) {
+    const nextHash = `#${view}`;
+    if (location.hash !== nextHash) history.replaceState(null, '', nextHash);
+  }
+  window.scrollTo(0, 0);
+  if (view === 'settings') refreshOrganizerSettings().catch((error) => showAlert(friendlyError(error)));
+}
+
+async function refreshOrganizerSettings() {
+  if (!ui.organizerList) return;
+  const [user, organizers] = await Promise.all([
+    getCurrentUser(),
+    listOrganizers(),
+  ]);
+  currentOrganizerUid = user?.uid || null;
+  const currentEmail = user?.email ? String(user.email).trim().toLowerCase() : null;
+  if (ui.organizerAccountEmail) {
+    ui.organizerAccountEmail.textContent = user?.email || 'Signed in without an email on this account.';
+  }
+  const active = organizers.filter((item) => item.active);
+  ui.organizerList.replaceChildren();
+  if (!active.length) {
+    ui.organizerList.append(node('p', 'panel-empty', 'No active organizers found.'));
+    return;
+  }
+  for (const item of active) {
+    const row = node('article', 'entry-row');
+    const body = node('div', 'entry-body');
+    const top = node('div', 'entry-top');
+    const label = item.email || (item.uid ? `UID ${item.uid.slice(0, 8)}…` : 'Unknown');
+    top.append(node('strong', '', label));
+    const isYou = (item.email && item.email === currentEmail)
+      || (item.uid && item.uid === currentOrganizerUid);
+    top.append(statusBadge(isYou ? 'You' : 'Organizer', isYou ? 'green' : 'blue'));
+    body.append(top);
+    if (!item.email && item.uid) body.append(node('p', 'entry-meta', `Account id ${item.uid}`));
+    row.append(body);
+    const actions = node('div', 'entry-actions');
+    if (!isYou) {
+      actions.append(actionButton('Remove', 'remove-organizer', item.email || item.uid, 'button-danger-outline'));
+    }
+    row.append(actions);
+    ui.organizerList.append(row);
+  }
+}
+
+function syncPendingBadges(count) {
+  for (const pill of [ui.navPendingPill, ui.mobilePendingPill]) {
+    if (!pill) continue;
+    pill.textContent = String(count);
+    pill.hidden = count < 1;
+  }
+}
+
+function partnerName(entry) {
+  if (!entry?.partnerPlayerId) return null;
+  return entries.find((item) => item.playerId === entry.partnerPlayerId)?.name || 'Partner';
+}
+
+function partnerEntry(entry) {
+  if (!entry?.partnerPlayerId) return null;
+  const partner = entries.find((item) => item.playerId === entry.partnerPlayerId);
+  if (!partner || partner.partnerPlayerId !== entry.playerId) return null;
+  return partner;
+}
+
+function sortPair(a, b) {
+  return [a, b].sort((left, right) =>
+    String(left.name || '').localeCompare(String(right.name || ''), undefined, { sensitivity: 'base' }));
+}
+
+function appendConfirmedStatusBadges(top, entry) {
+  if (entry.sittingOut) top.append(statusBadge('Sitting out', 'amber'));
+  else top.append(statusBadge(entry.checkedIn ? 'Checked in' : 'Reserved', entry.checkedIn ? 'green' : 'blue'));
+  if (entry.hasPlayPin) top.append(statusBadge('PIN set', 'blue'));
+}
+
+function appendConfirmedActions(actions, entry, { includePairControls = true } = {}) {
+  if (!entry.checkedIn) {
+    actions.append(actionButton('Check in', 'check-in', entry.id, 'button-primary'));
+  } else if (entry.sittingOut) {
+    actions.append(actionButton('Resume', 'resume', entry.id, 'button-primary'));
+  } else {
+    actions.append(actionButton('Sit out', 'sit-out', entry.id, 'button-outline'));
+    actions.append(actionButton('Leave today', 'check-out', entry.id, 'button-outline'));
+  }
+  if (entry.hasPlayPin) {
+    actions.append(actionButton('Clear PIN', 'clear-pin', entry.id, 'button-quiet'));
+  }
+  if (entry.playerId) {
+    if (includePairControls) {
+      actions.append(actionButton(entry.partnerPlayerId ? 'Change pair' : 'Pair doubles', 'pair', entry.id, 'button-outline'));
+      if (entry.partnerPlayerId) actions.append(actionButton('Unpair', 'unpair', entry.id, 'button-quiet'));
+    }
+    actions.append(actionButton('Edit', 'edit-entry-player', entry.playerId, 'button-quiet'));
+  }
+  actions.append(actionButton('Remove', 'remove', entry.id, 'button-quiet'));
+}
+
+function renderPartnerPair(first, second) {
+  const [a, b] = sortPair(first, second);
+  const row = node('article', 'entry-row entry-pair');
+  const marks = node('div', 'entry-pair-avatars');
+  marks.append(avatar(a));
+  marks.append(avatar(b));
+  row.append(marks);
+  const body = node('div', 'entry-body');
+  const top = node('div', 'entry-top');
+  top.append(node('strong', '', `${a.name || 'Player'} + ${b.name || 'Player'}`));
+  top.append(statusBadge('Double Partners', 'amber'));
+  const oneSitting = Boolean(a.sittingOut) !== Boolean(b.sittingOut);
+  if (oneSitting) top.append(statusBadge('One sitting out · other plays solo', 'blue'));
+  body.append(top);
+  const details = [
+    [a.skillLevel, b.skillLevel].filter(Boolean).join(' / ') || 'Skill not set',
+  ];
+  if (oneSitting) {
+    const resting = a.sittingOut ? a : b;
+    const active = a.sittingOut ? b : a;
+    details.push(`${resting.name} resting · ${active.name} drawn solo`);
+  }
+  const signedA = formatSignupAt(a.createdAt);
+  const signedB = formatSignupAt(b.createdAt);
+  if (signedA && signedB && signedA === signedB) details.push(signedA);
+  else {
+    if (signedA) details.push(`${a.name}: ${signedA}`);
+    if (signedB) details.push(`${b.name}: ${signedB}`);
+  }
+  body.append(node('div', 'entry-meta', details.join(' · ')));
+
+  for (const person of [a, b]) {
+    const personBlock = node('div', 'entry-pair-person');
+    personBlock.append(node('span', 'entry-pair-person-name', person.name || 'Player'));
+    appendConfirmedStatusBadges(personBlock, person);
+    const actions = node('div', 'entry-actions');
+    appendConfirmedActions(actions, person, { includePairControls: false });
+    personBlock.append(actions);
+    body.append(personBlock);
+  }
+
+  const pairActions = node('div', 'entry-actions entry-pair-actions');
+  pairActions.append(actionButton('Change pair', 'pair', a.id, 'button-outline'));
+  pairActions.append(actionButton('Unpair', 'unpair', a.id, 'button-quiet'));
+  body.append(pairActions);
+  row.append(body);
+  return row;
+}
+
 function renderEntry(entry, kind) {
   const row = node('article', 'entry-row');
   row.append(avatar(entry));
@@ -173,20 +470,37 @@ function renderEntry(entry, kind) {
   const top = node('div', 'entry-top');
   top.append(node('strong', '', entry.name || 'Unnamed player'));
   if (kind === 'pending') top.append(statusBadge(entry.playerId ? 'Existing player claim' : 'New profile', entry.playerId ? 'blue' : 'amber'));
-  if (kind === 'confirmed') top.append(statusBadge(entry.checkedIn ? 'Checked in' : 'Reserved', entry.checkedIn ? 'green' : 'blue'));
+  if (kind === 'confirmed') {
+    appendConfirmedStatusBadges(top, entry);
+    if (entry.partnerPlayerId) top.append(statusBadge('Double Partners', 'amber'));
+  }
   if (kind === 'waitlist') top.append(statusBadge('Waitlist', 'amber'));
   body.append(top);
-  const details = [entry.skillLevel || 'Skill not set'];
-  if (entry.division && entry.division !== 'unspecified') details.push(entry.division);
-  if (kind === 'pending') details.push('Organizer review required');
-  body.append(node('div', 'entry-meta', details.join(' · ')));
+  if (kind === 'pending') {
+    body.append(nameInput(entry.id, entry.name));
+    body.append(skillSelect(entry.id, entry.skillLevel));
+    const details = [];
+    if (entry.division && entry.division !== 'unspecified') details.push(entry.division);
+    const signedUp = formatSignupAt(entry.createdAt);
+    if (signedUp) details.push(signedUp);
+    details.push('Fix name or skill if needed, then approve');
+    body.append(node('div', 'entry-meta', details.join(' · ')));
+  } else {
+    const details = [entry.skillLevel || 'Skill not set'];
+    if (entry.division && entry.division !== 'unspecified') details.push(entry.division);
+    const signedUp = formatSignupAt(entry.createdAt);
+    if (signedUp) details.push(signedUp);
+    if (kind === 'confirmed' && entry.partnerPlayerId) {
+      details.push(`with ${partnerName(entry)}`);
+    }
+    body.append(node('div', 'entry-meta', details.join(' · ')));
+  }
   const actions = node('div', 'entry-actions');
   if (kind === 'pending') {
     actions.append(actionButton('Approve', 'approve', entry.id, 'button-primary'));
     actions.append(actionButton('Reject', 'reject', entry.id, 'button-outline'));
   } else if (kind === 'confirmed') {
-    actions.append(actionButton(entry.checkedIn ? 'Check out' : 'Check in', entry.checkedIn ? 'check-out' : 'check-in', entry.id, entry.checkedIn ? 'button-outline' : 'button-primary'));
-    actions.append(actionButton('Remove', 'remove', entry.id, 'button-quiet'));
+    appendConfirmedActions(actions, entry);
   } else if (kind === 'waitlist') {
     actions.append(actionButton('Remove', 'remove', entry.id, 'button-quiet'));
   }
@@ -195,40 +509,167 @@ function renderEntry(entry, kind) {
   return row;
 }
 
-function renderList(container, items, kind, emptyMessage) {
-  const focused = container.contains(document.activeElement) ? {
-    action: document.activeElement.dataset?.action,
-    id: document.activeElement.dataset?.id,
-  } : null;
-  container.replaceChildren();
-  if (!items.length) {
-    container.append(node('p', 'panel-empty', emptyMessage));
-  } else {
-    for (const entry of items) container.append(renderEntry(entry, kind));
+function pageSlice(items, key, size = PAGE_SIZE) {
+  const total = items.length;
+  const pages = Math.max(1, Math.ceil(total / size) || 1);
+  const page = Math.min(Math.max(1, Number(listPages[key]) || 1), pages);
+  listPages[key] = page;
+  const start = (page - 1) * size;
+  return {
+    page,
+    pages,
+    total,
+    start: total ? start + 1 : 0,
+    end: Math.min(start + size, total),
+    items: items.slice(start, start + size),
+  };
+}
+
+function renderPager(pager, key, info) {
+  if (!pager) return;
+  if (!info.total || info.pages <= 1) {
+    pager.hidden = true;
+    pager.replaceChildren();
+    return;
   }
-  if (focused) {
-    const replacement = [...container.querySelectorAll('button[data-action]')]
-      .find((button) => button.dataset.action === focused.action && button.dataset.id === focused.id);
-    (replacement || container).focus({ preventScroll: true });
+  pager.hidden = false;
+  pager.replaceChildren();
+  const meta = node('span', 'list-pager-meta', `Showing ${info.start}–${info.end} of ${info.total}`);
+  const actions = node('div', 'list-pager-actions');
+  const prev = actionButton('Previous', 'page-prev', key, 'button-outline');
+  prev.disabled = info.page <= 1;
+  const label = node('span', 'list-pager-page', `Page ${info.page} / ${info.pages}`);
+  const next = actionButton('Next', 'page-next', key, 'button-outline');
+  next.disabled = info.page >= info.pages;
+  actions.append(prev, label, next);
+  pager.append(meta, actions);
+}
+
+function renderList(container, items, kind, emptyMessage, options = {}) {
+  const active = document.activeElement;
+  const focusedSkillId = kind === 'pending' && active?.matches?.('select[data-skill-for]')
+    ? active.dataset.skillFor
+    : null;
+  const focusedNameId = kind === 'pending' && active?.matches?.('input[data-name-for]')
+    ? active.dataset.nameFor
+    : null;
+  container.replaceChildren();
+  const pageKey = options.pageKey || null;
+  const pager = options.pager || null;
+  const pageable = pageKey ? pageSlice(items, pageKey) : { items, total: items.length, pages: 1, page: 1, start: items.length ? 1 : 0, end: items.length };
+  if (!items.length) {
+    if (pager) {
+      pager.hidden = true;
+      pager.replaceChildren();
+    }
+    container.append(node('p', 'panel-empty', emptyMessage));
+    return;
+  }
+  const skipped = new Set();
+  for (const entry of pageable.items) {
+    if (skipped.has(entry.id)) continue;
+    if (kind === 'confirmed') {
+      const partner = partnerEntry(entry);
+      if (partner && pageable.items.some((item) => item.id === partner.id)) {
+        skipped.add(partner.id);
+        container.append(renderPartnerPair(entry, partner));
+        continue;
+      }
+    }
+    container.append(renderEntry(entry, kind));
+  }
+  if (pageKey) renderPager(pager, pageKey, pageable);
+  if (focusedNameId) {
+    container.querySelector(`input[data-name-for="${CSS.escape(focusedNameId)}"]`)?.focus();
+  } else if (focusedSkillId) {
+    container.querySelector(`select[data-skill-for="${CSS.escape(focusedSkillId)}"]`)?.focus();
   }
 }
 
-function renderDirectory() {
-  const focused = ui.directoryList.contains(document.activeElement) ? {
-    action: document.activeElement.dataset?.action,
-    id: document.activeElement.dataset?.id,
-  } : null;
-  const activePlayerIds = new Set(entries.filter((entry) =>
-    ['pending', 'confirmed', 'waitlisted', 'waitlist'].includes(entry.status)).map((entry) => entry.playerId));
-  ui.directoryList.replaceChildren();
-  if (!directoryPlayers.length) {
-    const query = ui.directorySearch.value.trim();
-    ui.directoryList.append(node('p', 'panel-empty', query.length === 1
-      ? 'Type another letter to search.'
-      : query ? 'No matching approved player found.' : 'No approved players in the directory yet.'));
+function renderTodaySide(confirmed, waitlist, openSpots) {
+  if (!ui.todayPlayersList) return;
+  if (ui.todayCount) ui.todayCount.textContent = String(confirmed.length);
+  if (ui.todayWaitlistCount) ui.todayWaitlistCount.textContent = String(waitlist.length);
+  if (ui.todaySpotsNote) {
+    ui.todaySpotsNote.textContent = openSpots > 0
+      ? `${openSpots} open ${openSpots === 1 ? 'spot' : 'spots'} · approve a signup or add from Players`
+      : 'Confirmed spots are full · new approvals go to the waitlist';
+  }
+  renderList(ui.todayPlayersList, confirmed, 'confirmed', 'No reserved players yet today.');
+  if (ui.todayWaitlistList) {
+    renderList(ui.todayWaitlistList, waitlist, 'waitlist', 'Waitlist is empty.');
+  }
+}
+
+function rosteredPlayerIds() {
+  return new Set(entries.filter((entry) =>
+    ['pending', 'confirmed', 'waitlisted'].includes(entry.status)).map((entry) => entry.playerId));
+}
+
+function renderFillList() {
+  if (!ui.rosterFillList) return;
+  const search = ui.rosterSearch?.value.trim().toLowerCase() || '';
+  const openSpots = Math.max(0, Number(session?.spotsLeft ?? 0));
+  const activePlayerIds = rosteredPlayerIds();
+  const available = players
+    .filter((player) => {
+      if (!player.active || activePlayerIds.has(player.id)) return false;
+      return matchesPlayerSearch(player, search);
+    })
+    .sort(byPlayerName);
+  if (ui.fillSpotsNote) {
+    ui.fillSpotsNote.textContent = openSpots > 0
+      ? `${openSpots} open confirmed ${openSpots === 1 ? 'spot' : 'spots'}. Search someone who is not reserved yet, then add them or add and check in.`
+      : 'Confirmed spots are full. You can still reserve players to the waitlist.';
+  }
+  ui.rosterFillList.replaceChildren();
+  const pageable = pageSlice(available, 'fill');
+  if (!available.length) {
+    renderPager(ui.fillPager, 'fill', pageable);
+    ui.rosterFillList.append(node('p', 'panel-empty',
+      players.length
+        ? (search ? 'No matching free players.' : 'Every approved player is already on today’s list.')
+        : 'No approved players in the directory yet.'));
     return;
   }
-  for (const player of directoryPlayers) {
+  for (const player of pageable.items) {
+    const row = node('div', 'fill-row');
+    const head = node('div', 'fill-row-head');
+    head.append(avatar(player));
+    const info = node('div', 'person-info');
+    info.append(node('strong', '', player.name || 'Unnamed player'));
+    info.append(node('small', '', [player.skillLevel, player.division && player.division !== 'unspecified' ? player.division : ''].filter(Boolean).join(' · ') || 'Player'));
+    info.append(node('small', 'player-record', recordLabel(player)));
+    head.append(info);
+    row.append(head);
+    const actions = node('div', 'fill-row-actions');
+    if (openSpots > 0) {
+      actions.append(actionButton('Add & check in', 'reserve-checkin', player.id, 'button-primary'));
+      actions.append(actionButton('Reserve', 'reserve', player.id, 'button-outline'));
+    } else {
+      actions.append(actionButton('Waitlist', 'reserve', player.id, 'button-primary'));
+    }
+    row.append(actions);
+    ui.rosterFillList.append(row);
+  }
+  renderPager(ui.fillPager, 'fill', pageable);
+}
+
+function renderDirectory() {
+  const search = ui.directorySearch.value.trim().toLowerCase();
+  const available = players.filter((player) => {
+    const text = `${player.name || ''} ${player.skillLevel || ''} ${player.division || ''}`.toLowerCase();
+    return player.active && text.includes(search);
+  });
+  const activePlayerIds = rosteredPlayerIds();
+  ui.directoryList.replaceChildren();
+  const pageable = pageSlice(available, 'directory');
+  if (!available.length) {
+    renderPager(ui.directoryPager, 'directory', pageable);
+    ui.directoryList.append(node('p', 'panel-empty', players.length ? 'No matching player found.' : 'No approved players in the directory yet.'));
+    return;
+  }
+  for (const player of pageable.items) {
     const row = node('div', 'directory-row');
     row.append(avatar(player));
     const info = node('div', 'person-info');
@@ -241,65 +682,44 @@ function renderDirectory() {
     button.disabled = isActive;
     row.append(button);
     row.append(actionButton('Edit', 'edit-player', player.id, 'button-quiet'));
+    row.append(actionButton('Delete', 'delete-player', player.id, 'button-danger-outline'));
     ui.directoryList.append(row);
   }
-  if (focused) {
-    const replacement = [...ui.directoryList.querySelectorAll('button[data-action]')]
-      .find((button) => button.dataset.action === focused.action && button.dataset.id === focused.id);
-    (replacement || ui.directoryList).focus({ preventScroll: true });
-  }
-}
-
-async function loadDirectory(query = ui.directorySearch.value.trim()) {
-  const sequence = ++directorySearchSequence;
-  const view = activeView;
-  if (query.length === 1) {
-    directoryPlayers = [];
-    directoryHasMore = false;
-    ui.directorySearchStatus.textContent = 'Type at least two letters, or clear the search to browse.';
-    ui.directoryList.replaceChildren(node('p', 'panel-empty', 'Type another letter to search.'));
-    return;
-  }
-  ui.directorySearchStatus.textContent = query ? 'Searching players…' : 'Loading players…';
-  ui.directoryList.replaceChildren(node('p', 'panel-empty', 'Loading players…'));
-  try {
-    const result = await searchAdminPlayers(query);
-    if (sequence !== directorySearchSequence || view !== activeView || ui.dashboard.hidden) return;
-    directoryPlayers = Array.isArray(result.players) ? result.players : [];
-    directoryHasMore = Boolean(result.hasMore);
-    renderDirectory();
-    ui.directorySearchStatus.textContent = directoryHasMore
-      ? `Showing the first 40 ${query ? 'matches' : 'players'}. Type more letters to narrow the search.`
-      : `${directoryPlayers.length} ${directoryPlayers.length === 1 ? 'player' : 'players'} found.`;
-  } catch (error) {
-    if (sequence !== directorySearchSequence || view !== activeView || ui.dashboard.hidden) return;
-    directoryPlayers = [];
-    directoryHasMore = false;
-    ui.directoryList.replaceChildren(node('p', 'panel-empty', 'Player search could not load. Try again.'));
-    ui.directorySearchStatus.textContent = 'Player search could not load.';
-    showAlert(friendlyError(error), 'error', ui.directorySearch);
-  }
+  renderPager(ui.directoryPager, 'directory', pageable);
 }
 
 function renderDashboard(data) {
   if (!data?.session) return;
   session = data.session;
   entries = Array.isArray(data.entries) ? data.entries : [];
+  players = Array.isArray(data.players) ? data.players : [];
   selectedDate = session.date;
-  ui.dashboardTitle.textContent = formatDate(session.date);
-  ui.settingsTitle.textContent = `Settings · ${formatDate(session.date)}`;
   if (document.activeElement !== ui.sessionDate) ui.sessionDate.value = session.date || '';
-  if (!capacityDirty && document.activeElement !== ui.capacityInput) {
-    ui.capacityInput.value = String(session.capacity ?? 32);
-  }
+  if (document.activeElement !== ui.capacityInput) ui.capacityInput.value = String(session.capacity ?? 32);
 
-  const pending = entries.filter((entry) => entry.status === 'pending');
-  const confirmed = entries.filter((entry) => entry.status === 'confirmed');
-  const waitlist = entries.filter((entry) => ['waitlist', 'waitlisted'].includes(entry.status));
-  const confirmedCount = Number(session.confirmedCount ?? confirmed.length);
-  const checkedInCount = Number(session.checkedInCount ?? confirmed.filter((entry) => entry.checkedIn).length);
-  const pendingCount = Number(session.pendingCount ?? pending.length);
-  const waitlistCount = Number(session.waitlistCount ?? waitlist.length);
+  const pending = entries
+    .filter((entry) => entry.status === 'pending')
+    .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')) || byPlayerName(a, b));
+  const confirmedSearch = ui.confirmedSearch?.value.trim().toLowerCase() || '';
+  const confirmedAll = entries
+    .filter((entry) => entry.status === 'confirmed')
+    .sort(byPlayerName);
+  const confirmed = confirmedAll.filter((entry) => matchesPlayerSearch(entry, confirmedSearch));
+  const waitlist = entries
+    .filter((entry) => ['waitlist', 'waitlisted'].includes(entry.status))
+    .sort(byPlayerName);
+  const pendingIds = new Set(pending.map((entry) => entry.id));
+  for (const entryId of [...pendingSkillByEntry.keys()]) {
+    if (!pendingIds.has(entryId)) pendingSkillByEntry.delete(entryId);
+  }
+  for (const entryId of [...pendingNameByEntry.keys()]) {
+    if (!pendingIds.has(entryId)) pendingNameByEntry.delete(entryId);
+  }
+  const confirmedCount = Number(session.confirmedCount ?? confirmedAll.length);
+  const checkedInCount = Number(session.checkedInCount ?? confirmedAll.filter((entry) => entry.checkedIn).length);
+  // Badge/list counts must match the entries currently shown — never a stale session field.
+  const pendingCount = pending.length;
+  const waitlistCount = waitlist.length;
   const capacity = Number(session.capacity ?? 32);
   const open = Number(session.spotsLeft ?? Math.max(0, capacity - confirmedCount));
   ui.confirmed.textContent = String(confirmedCount);
@@ -312,88 +732,74 @@ function renderDashboard(data) {
   ui.waitlist.textContent = String(waitlistCount);
   ui.open.textContent = String(open);
   ui.pendingCount.textContent = String(pendingCount);
-  ui.waitlistCount.textContent = String(waitlistCount);
+  if (ui.waitlistCount) ui.waitlistCount.textContent = String(waitlistCount);
+  if (ui.waitlistBlock) ui.waitlistBlock.hidden = waitlist.length === 0;
+  syncPendingBadges(pendingCount);
   renderList(ui.pendingList, pending, 'pending', 'No signup requests to review.');
-  renderList(ui.confirmedList, confirmed, 'confirmed', 'No reserved players yet. Share the signup link or add a known player.');
-  renderList(ui.waitlistList, waitlist, 'waitlist', 'No players on the waitlist.');
+  renderList(
+    ui.confirmedList,
+    confirmed,
+    'confirmed',
+    confirmedSearch
+      ? 'No confirmed players match that search.'
+      : 'No reserved players yet. Share the signup link or add a known player.',
+  );
+  applyConfirmedLayout();
+  if (ui.waitlistList) {
+    renderList(ui.waitlistList, waitlist, 'waitlist', 'No players on the waitlist.', {
+      pageKey: 'waitlist', pager: ui.waitlistPager,
+    });
+  }
+  renderTodaySide(confirmedAll, waitlist, open);
+  renderFillList();
   renderDirectory();
 
   activeShareLink = session.signupUrl || `${location.origin}/join?token=${encodeURIComponent(session.shareToken || session.id)}`;
+  activePlayLink = `${location.origin}/play?token=${encodeURIComponent(session.shareToken || session.id)}`;
   ui.shareLink.textContent = activeShareLink;
+  if (ui.playLink) ui.playLink.textContent = activePlayLink;
   ui.copyLink.disabled = false;
   ui.copyLinkSecondary.disabled = false;
+  if (ui.copyPlayLink) ui.copyPlayLink.disabled = false;
+  renderDayStrip(session.date || selectedDate);
 }
 
 async function beginDashboard(date) {
-  const request = ++viewRequest;
-  const snapshot = await withDashboardTimeout(getAdminDashboard(date));
-  if (request !== viewRequest) return;
-  capacityDirty = false;
-  unsubscribeDashboard?.();
-  unsubscribeDashboard = null;
-  activeView = request;
+  const snapshot = await getAdminDashboard(date);
   ui.loading.hidden = true;
   ui.auth.hidden = true;
   ui.dashboard.hidden = false;
   ui.signOut.hidden = false;
+  if (ui.openSettings) ui.openSettings.hidden = false;
   renderDashboard(snapshot);
-  clearAlert();
-  // Once the session is visible, a slow court query or listener must not hold
-  // the entire dashboard on its loading screen.
-  courtUI.refresh(snapshot.session.id).catch((error) => {
-    if (request === viewRequest) showAlert(friendlyError(error));
-  });
-  loadDirectory();
-  watchAdminDashboard((next) => {
-    if (request !== activeView) return;
-    if (next.error) {
+  const hashView = location.hash.replace(/^#/, '');
+  const pendingCount = snapshot.entries.filter((entry) => entry.status === 'pending').length;
+  showView(VIEWS.includes(hashView) ? hashView : (pendingCount > 0 ? 'requests' : 'overview'));
+  // Show the desk immediately; courts can finish loading afterward.
+  courtUI.refresh(session.id).catch((error) => showAlert(friendlyError(error)));
+  unsubscribeDashboard?.();
+  unsubscribeDashboard = await watchAdminDashboard((next) => {
+    if (next?.error) {
       showAlert(friendlyError(next.error));
       return;
     }
-    const previousSessionId = session?.id;
     renderDashboard(next);
-    if (session?.id && previousSessionId !== session.id) {
-      courtUI.refresh(session.id).catch((error) => showAlert(friendlyError(error)));
-    }
-  }, snapshot.session.date).then((stop) => {
-    if (request !== viewRequest) stop();
-    else unsubscribeDashboard = stop;
-  }).catch((error) => {
-    if (request === viewRequest) showAlert(`Live updates could not start: ${friendlyError(error)} Use Refresh to try again.`);
-  });
+  }, date);
+  clearAlert();
 }
 
 function showAuth() {
-  viewRequest += 1;
-  activeView = 0;
   unsubscribeDashboard?.();
   unsubscribeDashboard = null;
-  courtUI.dispose();
-  session = null;
-  entries = [];
-  directoryPlayers = [];
-  directorySearchSequence += 1;
   ui.loading.hidden = true;
   ui.auth.hidden = false;
   ui.dashboard.hidden = true;
   ui.signOut.hidden = true;
-}
-
-function showLoadingFailure(error) {
-  showAuth();
-  ui.loading.hidden = false;
-  ui.auth.hidden = true;
-  ui.loading.setAttribute('role', 'alert');
-  ui.loading.querySelector('h1').textContent = 'Dashboard could not load';
-  ui.loadingMessage.textContent = friendlyError(error);
-  ui.reloadPage.hidden = false;
+  if (ui.openSettings) ui.openSettings.hidden = true;
 }
 
 async function refreshDashboard() {
-  const date = selectedDate;
-  const request = activeView;
-  const data = await getAdminDashboard(date);
-  if (request !== activeView || date !== selectedDate) return;
+  const data = await getAdminDashboard(selectedDate);
   renderDashboard(data);
   await courtUI.refresh(session.id);
 }
@@ -402,57 +808,178 @@ const courtUI = initCourtsUI({
   getSession: () => session,
   getEntries: () => entries,
   showAlert,
-  refreshRoster: async () => {
-    const date = selectedDate;
-    const request = activeView;
-    const data = await getAdminDashboard(date);
-    if (request === activeView && date === selectedDate) renderDashboard(data);
-  },
+  refreshRoster: async () => renderDashboard(await getAdminDashboard(selectedDate)),
 });
 
 async function runEntryAction(action, entryId, button) {
   if (!session) return;
+  if (action === 'edit-entry-player') {
+    openPlayerEditor(button.dataset.id);
+    return;
+  }
+  if (action === 'pair') {
+    openPartnerDialog(entryId);
+    return;
+  }
+  if (action === 'unpair') {
+    button.disabled = true;
+    try {
+      await setEntryPartner(session.id, entryId, null);
+      await refreshDashboard();
+      showAlert('Doubles pair cleared.', 'success');
+    } catch (error) {
+      showAlert(friendlyError(error));
+    } finally {
+      button.disabled = false;
+    }
+    return;
+  }
   const operations = {
     approve: approveEntry, reject: rejectEntry, remove: removeEntry,
     'check-in': checkInEntry, 'check-out': checkOutEntry,
   };
+  if (action === 'sit-out' || action === 'resume') {
+    button.disabled = true;
+    try {
+      await setEntrySittingOut(session.id, entryId, action === 'sit-out');
+      await refreshDashboard();
+      showAlert(action === 'sit-out' ? 'Player is sitting out of draws.' : 'Player is back in the waiting pool.', 'success');
+    } catch (error) {
+      showAlert(friendlyError(error));
+    } finally {
+      button.disabled = false;
+    }
+    return;
+  }
+  if (action === 'clear-pin') {
+    const name = entries.find((entry) => entry.id === entryId)?.name || 'this player';
+    if (!confirm(`Clear the desk PIN for ${name}? They can set a new PIN on /play.`)) return;
+    button.disabled = true;
+    try {
+      await clearPlayPin(session.id, entryId);
+      await refreshDashboard();
+      showAlert(`PIN cleared for ${name}.`, 'success');
+    } catch (error) {
+      showAlert(friendlyError(error));
+    } finally {
+      button.disabled = false;
+    }
+    return;
+  }
   const fn = operations[action];
   if (!fn) return;
-  const panel = button.closest('.panel');
   if (action === 'remove') {
     const name = entries.find((entry) => entry.id === entryId)?.name || 'this player';
     if (!confirm(`Remove ${name} from this session? A waitlisted player may be promoted.`)) return;
   }
   button.disabled = true;
   try {
-    await fn(session.id, entryId);
+    if (action === 'approve') {
+      const skillSelect = button.closest('.entry-row')?.querySelector('select[data-skill-for]');
+      const nameField = button.closest('.entry-row')?.querySelector('input[data-name-for]');
+      const skillLevel = skillSelect?.value || pendingSkillByEntry.get(entryId);
+      const name = (nameField?.value || pendingNameByEntry.get(entryId) || '').trim();
+      if (nameField && nameField.value.trim().length < 2) {
+        showAlert('Enter a name with at least 2 characters before approving.');
+        nameField.focus();
+        return;
+      }
+      await approveEntry(session.id, entryId, {
+        ...(skillLevel ? { skillLevel } : {}),
+        ...(name ? { name } : {}),
+      });
+      pendingSkillByEntry.delete(entryId);
+      pendingNameByEntry.delete(entryId);
+    } else {
+      await fn(session.id, entryId);
+    }
     await refreshDashboard();
-    if (action === 'approve') await loadDirectory();
-    showAlert('Session updated.', 'success', panel);
+    showAlert('Session updated.', 'success');
   } catch (error) {
-    showAlert(friendlyError(error), 'error', panel);
+    showAlert(friendlyError(error));
   } finally {
     button.disabled = false;
   }
 }
 
-for (const list of [ui.pendingList, ui.confirmedList, ui.waitlistList]) {
-  list.addEventListener('click', (event) => {
+function openPartnerDialog(entryId) {
+  const entry = entries.find((item) => item.id === entryId);
+  if (!entry?.playerId) return showAlert('Only saved player profiles can be paired.');
+  const select = $('partnerPlayerInput');
+  select.replaceChildren();
+  const candidates = entries.filter((item) =>
+    item.status === 'confirmed' && item.playerId && item.playerId !== entry.playerId);
+  if (!candidates.length) return showAlert('Need another confirmed player to pair with.');
+  for (const candidate of candidates) {
+    const option = node('option', '', candidate.partnerPlayerId && candidate.partnerPlayerId !== entry.playerId
+      ? `${candidate.name} (currently paired)`
+      : candidate.name);
+    option.value = candidate.playerId;
+    if (candidate.playerId === entry.partnerPlayerId) option.selected = true;
+    select.append(option);
+  }
+  $('partnerEntryInput').value = entryId;
+  $('partnerDialogTitle').textContent = `Pair ${entry.name}`;
+  $('partnerDialog').showModal();
+}
+
+$('cancelPartner')?.addEventListener('click', () => $('partnerDialog')?.close());
+$('partnerForm')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!session) return;
+  const save = $('savePartner');
+  save.disabled = true;
+  try {
+    await setEntryPartner(session.id, $('partnerEntryInput').value, $('partnerPlayerInput').value);
+    $('partnerDialog').close();
+    await refreshDashboard();
+    showAlert('Doubles partners locked for today’s draws.', 'success');
+  } catch (error) {
+    showAlert(friendlyError(error));
+  } finally {
+    save.disabled = false;
+  }
+});
+
+for (const list of [ui.pendingList, ui.confirmedList, ui.waitlistList, ui.todayPlayersList, ui.todayWaitlistList]) {
+  list?.addEventListener('click', (event) => {
     const button = event.target.closest('button[data-action]');
     if (button) runEntryAction(button.dataset.action, button.dataset.id, button);
   });
 }
+function openPlayerEditor(playerId) {
+  const player = players.find((item) => item.id === playerId);
+  if (!player) return showAlert('Player profile not found.');
+  $('playerDialogTitle').textContent = `Edit ${player.name}`;
+  $('playerIdInput').value = player.id;
+  $('playerNameInput').value = player.name || '';
+  $('playerSkillInput').value = player.skillLevel || 'intermediate';
+  $('playerDivisionInput').value = player.division || 'unspecified';
+  $('playerDialog').showModal();
+  $('playerNameInput').focus();
+}
+
+ui.gotoPlayers?.addEventListener('click', () => showView('roster'));
 ui.directoryList.addEventListener('click', async (event) => {
   const button = event.target.closest('button[data-action]');
   if (!button || !session) return;
   if (button.dataset.action === 'edit-player') {
-    const player = directoryPlayers.find((item) => item.id === button.dataset.id);
-    if (!player) return;
-    $('playerDialogTitle').textContent = `Edit ${player.name}`;
-    $('playerIdInput').value = player.id;
-    $('playerSkillInput').value = player.skillLevel;
-    $('playerDivisionInput').value = player.division || 'unspecified';
-    $('playerDialog').showModal();
+    openPlayerEditor(button.dataset.id);
+    return;
+  }
+  if (button.dataset.action === 'delete-player') {
+    const player = players.find((item) => item.id === button.dataset.id);
+    const name = player?.name || 'this player';
+    if (!confirm(`Delete ${name} from the directory? They can be re-added later. Today’s roster spots are not removed automatically.`)) return;
+    button.disabled = true;
+    try {
+      await deletePlayer(button.dataset.id);
+      await refreshDashboard();
+      showAlert(`${name} removed from the directory.`, 'success');
+    } catch (error) {
+      showAlert(friendlyError(error));
+      button.disabled = false;
+    }
     return;
   }
   if (button.dataset.action !== 'reserve') return;
@@ -460,74 +987,60 @@ ui.directoryList.addEventListener('click', async (event) => {
   try {
     await reservePlayer(session.id, button.dataset.id);
     await refreshDashboard();
-    showAlert('Player added to this session’s roster.', 'success', ui.directorySearch);
+    showAlert('Player added to today’s roster.', 'success');
   } catch (error) {
-    showAlert(friendlyError(error), 'error', ui.directorySearch);
+    showAlert(friendlyError(error));
+    button.disabled = false;
+  }
+});
+ui.rosterSearch?.addEventListener('input', () => {
+  listPages.fill = 1;
+  renderFillList();
+});
+ui.confirmedSearch?.addEventListener('input', () => {
+  if (!session) return;
+  renderDashboard({ session, entries, players });
+});
+ui.rosterFillList?.addEventListener('click', async (event) => {
+  const button = event.target.closest('button[data-action]');
+  if (!button || !session) return;
+  if (!['reserve', 'reserve-checkin'].includes(button.dataset.action)) return;
+  button.disabled = true;
+  try {
+    const checkIn = button.dataset.action === 'reserve-checkin';
+    const result = await reservePlayer(session.id, button.dataset.id, { checkIn });
+    await refreshDashboard();
+    if (result.entry?.checkedIn) showAlert('Player added and checked in.', 'success');
+    else if (result.entry?.status === 'waitlisted') showAlert('Player added to the waitlist.', 'success');
+    else showAlert('Player reserved for today.', 'success');
+  } catch (error) {
+    showAlert(friendlyError(error));
     button.disabled = false;
   }
 });
 ui.directorySearch.addEventListener('input', () => {
-  clearTimeout(directorySearchTimer);
-  directorySearchSequence += 1;
-  directoryPlayers = [];
-  ui.directoryList.replaceChildren(node('p', 'panel-empty', 'Searching players…'));
-  ui.directorySearchStatus.textContent = 'Searching players…';
-  directorySearchTimer = setTimeout(() => loadDirectory(), 260);
+  listPages.directory = 1;
+  renderDirectory();
 });
-ui.addPlayerButton.addEventListener('click', () => {
-  if (!session) return showAlert('Open a session before adding a player.', 'error', ui.directorySearch);
-  clearAlert();
-  ui.addPlayerDialog.showModal();
-});
-$('cancelAddPlayer').addEventListener('click', () => ui.addPlayerDialog.close());
-ui.addPlayerDialog.addEventListener('close', () => {
-  ui.addPlayerForm.reset();
-  if (addPhotoPreviewUrl) URL.revokeObjectURL(addPhotoPreviewUrl);
-  addPhotoPreviewUrl = null;
-  ui.addPlayerPhotoPreview.replaceChildren('+');
-});
-ui.addPlayerPhoto.addEventListener('change', () => {
-  if (addPhotoPreviewUrl) URL.revokeObjectURL(addPhotoPreviewUrl);
-  addPhotoPreviewUrl = null;
-  ui.addPlayerPhotoPreview.replaceChildren('+');
-  const file = ui.addPlayerPhoto.files?.[0];
-  if (!file) return;
-  addPhotoPreviewUrl = URL.createObjectURL(file);
-  const preview = document.createElement('img');
-  preview.src = addPhotoPreviewUrl;
-  preview.alt = '';
-  ui.addPlayerPhotoPreview.replaceChildren(preview);
-});
-ui.addPlayerForm.addEventListener('submit', async (event) => {
-  event.preventDefault();
-  if (!ui.addPlayerForm.reportValidity() || !session) return;
-  ui.saveAddPlayer.disabled = true;
-  ui.saveAddPlayer.textContent = 'Adding…';
-  let result;
-  try {
-    const photoData = await compressPlayerPhoto(ui.addPlayerPhoto.files?.[0]);
-    result = await createAndReservePlayer({
-      sessionId: session.id,
-      name: ui.addPlayerName.value.trim(),
-      skillLevel: ui.addPlayerSkill.value,
-      division: ui.addPlayerDivision.value,
-      photoData,
-    });
-  } catch (error) {
-    showAlert(friendlyError(error), 'error', ui.addPlayerDialog);
-    return;
-  } finally {
-    ui.saveAddPlayer.disabled = false;
-    ui.saveAddPlayer.textContent = 'Add to session';
-  }
-  ui.addPlayerDialog.close();
-  ui.directorySearch.value = '';
-  const status = result?.status || result?.entry?.status;
-  showAlert(status === 'waitlisted' ? 'Player created and added to the waitlist.' : 'Player created and reserved for this session.', 'success', ui.directorySearch);
-  refreshDashboard().catch((error) => showAlert(`Player added, but the roster could not refresh: ${friendlyError(error)}`, 'error', ui.directorySearch));
-  loadDirectory('').catch((error) => showAlert(friendlyError(error), 'error', ui.directorySearch));
-});
-ui.capacityInput.addEventListener('input', () => { capacityDirty = true; });
+
+for (const pager of [ui.waitlistPager, ui.fillPager, ui.directoryPager]) {
+  pager?.addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-action]');
+    if (!button) return;
+    const key = button.dataset.id;
+    if (!Object.prototype.hasOwnProperty.call(listPages, key)) return;
+    if (button.dataset.action === 'page-prev') listPages[key] = Math.max(1, listPages[key] - 1);
+    if (button.dataset.action === 'page-next') listPages[key] += 1;
+    if (key === 'waitlist') renderDashboard({ session, entries, players });
+    else if (key === 'fill') renderFillList();
+    else if (key === 'directory') renderDirectory();
+  });
+}
+
+ui.confirmedViewGrid?.addEventListener('click', () => setConfirmedLayout('grid'));
+ui.confirmedViewList?.addEventListener('click', () => setConfirmedLayout('list'));
+applyConfirmedLayout();
+
 $('cancelPlayer').addEventListener('click', () => $('playerDialog').close());
 $('playerForm').addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -535,17 +1048,76 @@ $('playerForm').addEventListener('submit', async (event) => {
   save.disabled = true;
   try {
     await updatePlayer($('playerIdInput').value, {
+      name: $('playerNameInput').value,
       skillLevel: $('playerSkillInput').value,
       division: $('playerDivisionInput').value,
     }, session?.id);
     $('playerDialog').close();
     await refreshDashboard();
-    await loadDirectory();
-    showAlert('Player profile updated.', 'success', ui.directorySearch);
+    showAlert('Player profile updated.', 'success');
   } catch (error) {
-    showAlert(friendlyError(error), 'error', $('playerDialog'));
+    showAlert(friendlyError(error));
   } finally {
     save.disabled = false;
+  }
+});
+
+function openAddPlayerDialog() {
+  if (!session) return showAlert('Load today’s session first.');
+  $('addPlayerNameInput').value = '';
+  $('addPlayerSkillInput').value = 'intermediate';
+  $('addPlayerDivisionInput').value = 'unspecified';
+  $('addPlayerReserveInput').checked = true;
+  $('addPlayerCheckInInput').checked = false;
+  $('addPlayerDialog').showModal();
+  $('addPlayerNameInput').focus();
+}
+
+$('addPlayerButton')?.addEventListener('click', openAddPlayerDialog);
+$('addPlayerDirectoryButton')?.addEventListener('click', openAddPlayerDialog);
+$('cancelAddPlayer')?.addEventListener('click', () => $('addPlayerDialog')?.close());
+$('addPlayerReserveInput')?.addEventListener('change', () => {
+  if (!$('addPlayerReserveInput').checked) $('addPlayerCheckInInput').checked = false;
+});
+$('addPlayerCheckInInput')?.addEventListener('change', () => {
+  if ($('addPlayerCheckInInput').checked) $('addPlayerReserveInput').checked = true;
+});
+$('addPlayerForm')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!$('addPlayerForm').reportValidity() || !session) return;
+  const save = $('saveAddPlayer');
+  save.disabled = true;
+  try {
+    const result = await createAndReservePlayer(session.id, {
+      name: $('addPlayerNameInput').value,
+      skillLevel: $('addPlayerSkillInput').value,
+      division: $('addPlayerDivisionInput').value,
+      reserve: $('addPlayerReserveInput').checked,
+      checkIn: $('addPlayerCheckInInput').checked,
+    });
+    $('addPlayerDialog').close();
+    await refreshDashboard();
+    if (result.entry?.checkedIn) showAlert('Player created and checked in.', 'success');
+    else if (result.entry?.status === 'waitlisted') showAlert('Player created and waitlisted.', 'success');
+    else if (result.entry) showAlert('Player created and reserved for today.', 'success');
+    else showAlert('Player saved to the directory.', 'success');
+  } catch (error) {
+    showAlert(friendlyError(error));
+  } finally {
+    save.disabled = false;
+  }
+});
+
+ui.dayStrip?.addEventListener('click', async (event) => {
+  const chip = event.target.closest('button.day-chip[data-date]');
+  if (!chip) return;
+  chip.disabled = true;
+  try {
+    await switchSessionDate(chip.dataset.date);
+  } catch (error) {
+    showAlert(friendlyError(error));
+  } finally {
+    chip.disabled = false;
   }
 });
 
@@ -554,47 +1126,54 @@ ui.settingsForm.addEventListener('submit', async (event) => {
   if (!ui.settingsForm.reportValidity()) return;
   const date = ui.sessionDate.value;
   const capacity = Number(ui.capacityInput.value);
-  if (!Number.isInteger(capacity) || capacity < 1 || capacity > 512) {
-    return showAlert('Enter a player limit from 1 to 512.', 'error', ui.capacityInput);
-  }
+  if (!Number.isInteger(capacity) || capacity < 1 || capacity > 512) return showAlert('Enter a player limit from 1 to 512.');
   const button = ui.settingsForm.querySelector('[type="submit"]');
   button.disabled = true;
   try {
     if (date !== selectedDate) {
       const data = await getAdminDashboard(date);
-      if (capacityDirty) await updateSession(data.session.id, { capacity });
+      await updateSession(data.session.id, { capacity });
       await beginDashboard(date);
     } else {
-      if (capacityDirty || capacity !== session.capacity) await updateSession(session.id, { capacity });
+      await updateSession(session.id, { capacity });
       await refreshDashboard();
-      capacityDirty = false;
     }
-    showAlert('Session settings saved.', 'success', ui.settingsForm);
+    showAlert('Session settings saved.', 'success');
   } catch (error) {
-    showAlert(friendlyError(error), 'error', ui.settingsForm);
+    showAlert(friendlyError(error));
   } finally {
     button.disabled = false;
   }
 });
 
-async function copyLink(button) {
+async function copyLink() {
   if (!activeShareLink) return;
   try {
     await navigator.clipboard.writeText(activeShareLink);
-    showAlert('Signup link copied. Paste it into your group chat.', 'success', button);
+    showAlert('Signup link copied. Paste it into your group chat.', 'success');
   } catch {
-    showAlert('Clipboard access failed. Select and copy the link shown in Session settings.', 'error', button);
+    showAlert('Clipboard access failed. Select and copy the link shown in Session settings.');
   }
 }
-ui.copyLink.addEventListener('click', () => copyLink(ui.copyLink));
-ui.copyLinkSecondary.addEventListener('click', () => copyLink(ui.copyLinkSecondary));
+async function copyPlayLink() {
+  if (!activePlayLink) return;
+  try {
+    await navigator.clipboard.writeText(activePlayLink);
+    showAlert('Player desk link copied. Players use it to check in or sit out.', 'success');
+  } catch {
+    showAlert('Clipboard access failed. Select and copy the player desk link in Session settings.');
+  }
+}
+ui.copyLink.addEventListener('click', copyLink);
+ui.copyLinkSecondary.addEventListener('click', copyLink);
+ui.copyPlayLink?.addEventListener('click', copyPlayLink);
 ui.refresh.addEventListener('click', async () => {
   ui.refresh.disabled = true;
   try {
     await refreshDashboard();
-    showAlert('Dashboard refreshed.', 'success', ui.refresh);
+    showAlert('Dashboard refreshed.', 'success');
   } catch (error) {
-    showAlert(friendlyError(error), 'error', ui.refresh);
+    showAlert(friendlyError(error));
   } finally {
     ui.refresh.disabled = false;
   }
@@ -602,25 +1181,22 @@ ui.refresh.addEventListener('click', async () => {
 
 ui.reset.addEventListener('click', () => {
   ui.resetConfirm.value = '';
-  ui.resetTitle.textContent = 'Reset ' + formatDate(selectedDate) + ' signups?';
-  ui.resetDescription.textContent = 'This clears requests, reservations, the waitlist, and check-ins for ' +
-    formatDate(selectedDate) + '. Saved player profiles remain available.';
   ui.resetDialog.showModal();
   ui.resetConfirm.focus();
 });
 ui.cancelReset.addEventListener('click', () => ui.resetDialog.close());
 ui.resetForm.addEventListener('submit', async (event) => {
   event.preventDefault();
-  if (ui.resetConfirm.value.trim() !== 'RESET') return showAlert('Type RESET exactly to confirm.', 'error', ui.resetConfirm);
+  if (ui.resetConfirm.value.trim() !== 'RESET') return showAlert('Type RESET exactly to confirm.');
   const button = $('confirmReset');
   button.disabled = true;
   try {
     await resetSession(selectedDate);
     ui.resetDialog.close();
     await beginDashboard(selectedDate);
-    showAlert(formatDate(selectedDate) + ' signups were reset. Share the new link for this session.', 'success', ui.reset);
+    showAlert('Today’s signups were reset. Share the new link for this session.', 'success');
   } catch (error) {
-    showAlert(friendlyError(error), 'error', ui.resetConfirm);
+    showAlert(friendlyError(error));
   } finally {
     button.disabled = false;
   }
@@ -648,24 +1224,83 @@ ui.signOut.addEventListener('click', async () => {
     showAlert(friendlyError(error));
   }
 });
+ui.openSettings?.addEventListener('click', () => showView('settings'));
+
+ui.organizerAddForm?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!ui.organizerAddForm.reportValidity()) return;
+  const button = ui.organizerAddForm.querySelector('[type="submit"]');
+  button.disabled = true;
+  try {
+    const { email } = await addOrganizer(ui.organizerAddEmail.value);
+    ui.organizerAddForm.reset();
+    await refreshOrganizerSettings();
+    showAlert(`${email} can sign in on /admin now.`, 'success');
+  } catch (error) {
+    showAlert(friendlyError(error));
+  } finally {
+    button.disabled = false;
+  }
+});
+
+ui.organizerList?.addEventListener('click', async (event) => {
+  const button = event.target.closest('button[data-action="remove-organizer"]');
+  if (!button) return;
+  const label = button.closest('.entry-row')?.querySelector('strong')?.textContent || 'this organizer';
+  if (!confirm(`Remove organizer access for ${label}?`)) return;
+  button.disabled = true;
+  try {
+    await removeOrganizer(button.dataset.id);
+    await refreshOrganizerSettings();
+    showAlert('Organizer access removed.', 'success');
+  } catch (error) {
+    showAlert(friendlyError(error));
+  } finally {
+    button.disabled = false;
+  }
+});
+
+document.querySelector('.web-nav')?.addEventListener('click', (event) => {
+  const link = event.target.closest('a[data-view]');
+  if (!link) return;
+  event.preventDefault();
+  showView(link.dataset.view);
+});
+document.querySelector('.mobile-nav')?.addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-view]');
+  if (!button) return;
+  showView(button.dataset.view);
+});
+window.addEventListener('hashchange', () => {
+  const hashView = location.hash.replace(/^#/, '');
+  if (VIEWS.includes(hashView) && hashView !== currentView) showView(hashView, { updateHash: false });
+});
 
 const slowLoading = setTimeout(() => {
   if (!ui.loading.hidden) {
     ui.loadingMessage.textContent = 'Still connecting to Firebase. Reload this page if it does not finish.';
     ui.reloadPage.hidden = false;
   }
-}, 12000);
+}, 8000);
 try {
-  await beginDashboard();
-} catch (error) {
-  if (String(error?.code || '').includes('auth-required')) {
+  const user = await withTimeout(
+    getCurrentUser(),
+    15000,
+    'Sign-in check timed out. Reload this page or sign in again.',
+  );
+  if (!user || user.isAnonymous) {
     showAuth();
-  } else if (error?.code === 'organizer-not-approved') {
-    showAuth();
-    showAlert(friendlyError(error));
   } else {
-    showLoadingFailure(error);
+    await withTimeout(
+      beginDashboard(),
+      20000,
+      'Dashboard load timed out. Check your connection, then reload.',
+    );
   }
+} catch (error) {
+  showAuth();
+  if (!String(error?.code || '').includes('auth-required')) showAlert(friendlyError(error));
 } finally {
   clearTimeout(slowLoading);
+  if (!ui.loading.hidden) ui.loading.hidden = true;
 }
