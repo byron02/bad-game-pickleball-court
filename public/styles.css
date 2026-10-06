@@ -886,12 +886,15 @@ input[type="datetime-local"].input {
   .play-selected { padding: 12px; border-radius: 12px; }
   .play-actions-inline { grid-template-columns: 1fr; }
   .play-pin-dialog {
+    inset: auto 0 0 0;
     width: 100%;
     max-width: none;
-    margin: auto 0 0;
+    height: fit-content;
+    margin: 0;
     border-radius: 20px 20px 0 0;
     border-bottom: 0;
     padding: 18px 16px calc(16px + env(safe-area-inset-bottom, 0px));
+    box-shadow: 0 -12px 40px rgb(10 32 62 / 22%);
   }
   .play-pin-dialog::backdrop { background: rgb(7 23 43 / 62%); }
   .play-footer {
