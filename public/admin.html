@@ -21,7 +21,7 @@
   </header>
 
   <main class="shell admin-main">
-    <div id="adminAlert" class="alert" role="alert" hidden></div>
+    <div id="adminAlert" class="alert" role="status" aria-live="polite" hidden></div>
     <section id="loadingPanel" class="auth-panel" role="status">
       <span class="eyebrow">Organizer desk</span>
       <h1>Loading your dashboard…</h1>
@@ -36,9 +36,9 @@
     </section>
 
     <div id="dashboard" hidden>
-      <nav class="web-nav" aria-label="Dashboard sections"><a href="#overview" class="current">Today's session</a><a href="#requests">Requests</a><a href="#roster">Players</a><a href="#directory">Directory</a><a href="#courts">Courts</a></nav>
+      <nav class="web-nav" aria-label="Dashboard sections"><a href="#overview" class="current">Session</a><a href="#requests">Requests</a><a href="#roster">Players</a><a href="#directory">Directory</a><a href="#courts">Courts</a><a href="/events-admin">Events &amp; tournaments</a></nav>
       <section class="dashboard-head" id="overview">
-        <div><div class="eyebrow">Open play · Organizer dashboard</div><h1>Today's session</h1><p>Approve signups, track who arrived, and share the link with your group chat.</p></div>
+        <div><div class="eyebrow">Open play · Organizer dashboard</div><h1 id="dashboardTitle">Session</h1><p>Approve signups, track who arrived, and share the link with your group chat.</p></div>
         <div class="head-actions"><button id="refreshButton" class="button button-outline" type="button">Refresh</button><button id="copyLinkButton" class="button button-primary" type="button" disabled>Copy signup link</button></div>
       </section>
 
@@ -58,38 +58,39 @@
         <div class="admin-main-column">
           <section class="panel" id="requests">
             <div class="panel-head"><div><span class="eyebrow">Review queue</span><h2>Signup requests <span id="pendingCountLabel" class="count-pill">0</span></h2><p>Approve real players or reject spam and duplicate claims.</p></div></div>
-            <div id="pendingList" class="entry-list" aria-live="polite"></div>
+            <div id="pendingList" class="entry-list" tabindex="-1" aria-label="Signup requests"></div>
           </section>
 
           <section class="panel" id="roster">
             <div class="panel-head"><div><span class="eyebrow">Daily roster</span><h2>Reserved players</h2><p>Check in arrivals. A confirmed reservation holds its spot until removed or reset.</p></div></div>
-            <div id="confirmedList" class="entry-list" aria-live="polite"></div>
+            <div id="confirmedList" class="entry-list" tabindex="-1" aria-label="Reserved players"></div>
             <div class="list-subhead"><h3>Waitlist</h3><span id="waitlistCountLabel" class="count-pill">0</span></div>
-            <div id="waitlistList" class="entry-list"></div>
+            <div id="waitlistList" class="entry-list" tabindex="-1" aria-label="Waitlisted players"></div>
           </section>
         </div>
 
         <aside class="admin-side-column">
           <section class="panel settings-panel">
-            <div class="panel-head"><div><span class="eyebrow">Session settings</span><h2>Today's signup</h2><p>Set the session date and reservation limit.</p></div></div>
+            <div class="panel-head"><div><span class="eyebrow">Session settings</span><h2 id="settingsTitle">Session settings</h2><p>Choose a date and set its reservation limit.</p></div></div>
             <form id="settingsForm"><label class="field-label" for="sessionDateInput">Session date</label><input id="sessionDateInput" name="date" class="input" type="date" required><label class="field-label" for="capacityInput">Player limit</label><input id="capacityInput" name="capacity" class="input" type="number" min="1" max="512" step="1" required><button class="button button-primary button-wide" type="submit">Save session</button></form>
-            <div class="share-box"><span class="label-overline">Share in your GC</span><code id="shareLinkText">Loading signup link…</code><button id="copyLinkSecondary" class="button button-outline button-small" type="button" disabled>Copy link</button></div>
-            <button id="resetButton" class="button button-danger-outline button-wide" type="button">Reset today's signups</button>
+            <div class="share-box"><span class="label-overline">Share in your group chat</span><code id="shareLinkText">Loading signup link…</code><button id="copyLinkSecondary" class="button button-outline button-small" type="button" disabled>Copy link</button></div>
+            <button id="resetButton" class="button button-danger-outline button-wide" type="button">Reset this session's signups</button>
             <p class="field-help">Reset clears the session roster and requests. Player profiles stay in the directory.</p>
           </section>
 
           <section class="panel directory-panel" id="directory">
-            <div class="panel-head"><div><span class="eyebrow">Player database</span><h2>Add a known player</h2><p>Search an approved player and reserve them for today.</p></div></div>
+            <div class="panel-head directory-panel-head"><div><span class="eyebrow">Player database</span><h2>Add players</h2><p>Reserve an existing player or create a new profile for this session.</p></div><button id="addPlayerButton" class="button button-primary button-small" type="button">+ New player</button></div>
             <label class="field-label" for="directorySearch">Search players</label>
-            <div class="search-field"><span aria-hidden="true">⌕</span><input id="directorySearch" type="search" placeholder="Name or skill level" autocomplete="off"></div>
-            <div id="directoryList" class="directory-list" aria-live="polite"></div>
+            <div class="search-field"><span aria-hidden="true">⌕</span><input id="directorySearch" type="search" placeholder="First or last name" autocomplete="off"></div>
+            <p id="directorySearchStatus" class="field-help search-status" role="status" aria-live="polite">Loading players…</p>
+            <div id="directoryList" class="directory-list" tabindex="-1" aria-label="Player search results"></div>
           </section>
         </aside>
       </div>
 
       <section class="panel courts-panel" id="courts">
         <div class="panel-head court-panel-head"><div><span class="eyebrow">Live play</span><h2>Courts &amp; matches</h2><p>Set each court's format and eligible skill levels, draw checked-in players, then record the winner.</p></div><button id="addCourtButton" class="button button-primary" type="button">+ Add court</button></div>
-        <div id="courtGrid" class="court-grid" aria-live="polite"><p class="panel-empty">Loading courts…</p></div>
+        <div id="courtGrid" class="court-grid"><p class="panel-empty">Loading courts…</p></div>
         <div class="history-block"><h3>Recent results</h3><div id="matchHistory" class="match-history" aria-live="polite"><p class="panel-empty">No results recorded yet.</p></div></div>
       </section>
     </div>
@@ -135,8 +136,35 @@
     </form>
   </dialog>
 
-  <dialog id="resetDialog" class="confirm-dialog" aria-labelledby="resetTitle">
-    <form id="resetForm" method="dialog"><div class="dialog-icon" aria-hidden="true">!</div><h2 id="resetTitle">Reset today's signups?</h2><p>This clears today's requests, confirmed spots, waitlist, and check-ins. Saved player profiles remain available.</p><label class="field-label" for="resetConfirm">Type RESET to continue</label><input id="resetConfirm" class="input" type="text" autocomplete="off" required><div class="dialog-actions"><button id="cancelReset" class="button button-outline" type="button">Cancel</button><button id="confirmReset" class="button button-danger" type="submit">Reset signups</button></div></form>
+  <dialog id="addPlayerDialog" class="confirm-dialog court-dialog" aria-labelledby="addPlayerDialogTitle">
+    <form id="addPlayerForm">
+      <h2 id="addPlayerDialogTitle">Add a new player</h2>
+      <p>Create an approved profile and reserve a spot in this session. If the limit is full, the player joins the waitlist.</p>
+      <label class="field-label" for="addPlayerName">Player name</label>
+      <input id="addPlayerName" class="input" type="text" minlength="2" maxlength="60" autocomplete="name" required placeholder="First and last name">
+      <label class="field-label" for="addPlayerSkill">Skill level</label>
+      <select id="addPlayerSkill" class="input" required><option value="beginner">Beginner</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option></select>
+      <label class="field-label" for="addPlayerDivision">Division eligibility</label>
+      <select id="addPlayerDivision" class="input"><option value="unspecified">Open play only</option><option value="woman">Woman</option><option value="man">Man</option></select>
+      <label class="field-label" for="addPlayerPhoto">Photo <span class="optional">(optional)</span></label>
+      <div class="photo-picker"><span id="addPlayerPhotoPreview" class="photo-preview" aria-hidden="true">+</span><input id="addPlayerPhoto" type="file" accept="image/jpeg,image/png,image/webp" aria-label="Player photo"></div>
+      <p class="field-help">Search above first if this player already has a profile.</p>
+      <div class="dialog-actions"><button id="cancelAddPlayer" class="button button-outline" type="button">Cancel</button><button id="saveAddPlayer" class="button button-primary" type="submit">Add to session</button></div>
+    </form>
   </dialog>
+
+  <dialog id="resetDialog" class="confirm-dialog" aria-labelledby="resetTitle">
+    <form id="resetForm" method="dialog"><div class="dialog-icon" aria-hidden="true">!</div><h2 id="resetTitle">Reset session signups?</h2><p id="resetDescription">This clears the session's requests, confirmed spots, waitlist, and check-ins. Saved player profiles remain available.</p><label class="field-label" for="resetConfirm">Type RESET to continue</label><input id="resetConfirm" class="input" type="text" autocomplete="off" required><div class="dialog-actions"><button id="cancelReset" class="button button-outline" type="button">Cancel</button><button id="confirmReset" class="button button-danger" type="submit">Reset signups</button></div></form>
+  </dialog>
+  <script>
+    // This fallback still runs when the dashboard module cannot load.
+    const reloadFallback = document.getElementById('reloadPageButton');
+    reloadFallback.addEventListener('click', () => location.reload());
+    setTimeout(() => {
+      if (document.getElementById('loadingPanel').hidden) return;
+      document.getElementById('loadingMessage').textContent = 'The dashboard is taking longer than expected. Check your connection, then reload.';
+      reloadFallback.hidden = false;
+    }, 20000);
+  </script>
 </body>
 </html>

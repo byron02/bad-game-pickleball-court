@@ -11,7 +11,7 @@ const elements = {
   confirmed: $('confirmedCount'), capacity: $('capacityCount'), fill: $('capacityFill'),
   capacityNote: $('capacityNote'), waitlistCount: $('waitlistCount'), joinBody: $('joinBody'),
   existingTab: $('existingTab'), newTab: $('newTab'), existingPanel: $('existingPanel'), newPanel: $('newPanel'),
-  search: $('playerSearch'), results: $('searchResults'), selected: $('selectedPlayer'), existingSubmit: $('existingSubmit'),
+  search: $('playerSearch'), results: $('searchResults'), searchStatus: $('searchStatus'), selected: $('selectedPlayer'), existingSubmit: $('existingSubmit'),
   existingPhoto: $('existingPhoto'), existingPhotoPreview: $('existingPhotoPreview'),
   newForm: $('newPlayerForm'), newName: $('newName'), newSkill: $('newSkill'), newDivision: $('newDivision'), newPhoto: $('newPhoto'), photoPreview: $('photoPreview'),
   success: $('successPanel'), successTitle: $('successTitle'),
@@ -21,6 +21,7 @@ let currentSession = null;
 let selectedPlayer = null;
 let searchTimer = null;
 let searchSequence = 0;
+let lastSuccessStatus = null;
 const photoPreviewUrls = new Map();
 
 function showAlert(message) {
@@ -37,7 +38,7 @@ function clearAlert() {
 function formatDate(value) {
   if (!value) return 'Open play';
   const date = new Date(`${value}T12:00:00`);
-  return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric' }).format(date);
+  return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }).format(date);
 }
 
 function setBadge(text, kind) {
@@ -47,6 +48,8 @@ function setBadge(text, kind) {
 
 function updateSession(session) {
   currentSession = session;
+  const closeTime = Date.parse(session.closesAt || '');
+  const expired = Number.isFinite(closeTime) && Date.now() >= closeTime;
   const count = Number(session.confirmedCount ?? 0);
   const capacity = Number(session.capacity ?? 32);
   const spotsLeft = Number(session.spotsLeft ?? Math.max(0, capacity - count));
@@ -57,15 +60,20 @@ function updateSession(session) {
   elements.fill.style.width = `${Math.min(100, Math.round(count / Math.max(1, capacity) * 100))}%`;
   elements.capacityNote.textContent = spotsLeft > 0 ? `${spotsLeft} ${spotsLeft === 1 ? 'spot' : 'spots'} available after approval` : 'Confirmed spots full · join the waitlist';
   elements.waitlistCount.textContent = waitlist > 0 ? `${waitlist} on waitlist` : '';
-  if (session.open === false) {
+  if (session.open === false || expired) {
+    const wasShowingForm = !elements.joinBody.hidden;
     setBadge('Closed', 'red');
     elements.joinBody.hidden = true;
-    showAlert('Signups for this session are closed. Ask the organizer for the next open play link.');
+    if (wasShowingForm) showAlert('Signups for this session are closed. Ask the organizer for the next open play link.');
   } else {
     setBadge(spotsLeft > 0 ? 'Open' : 'Waitlist open', spotsLeft > 0 ? 'green' : 'amber');
     elements.joinBody.hidden = !elements.success.hidden;
   }
 }
+
+setInterval(() => {
+  if (currentSession?.closesAt) updateSession(currentSession);
+}, 60_000);
 
 function initials(name) {
   return name.split(/\s+/).slice(0, 2).map((part) => part[0] || '').join('').toUpperCase() || '?';
@@ -100,12 +108,17 @@ function renderResults(players, message = '') {
     note.className = 'empty-note';
     note.textContent = message || 'No player found. Use “I’m new” if this is your first visit.';
     elements.results.append(note);
+    elements.searchStatus.textContent = message || 'No matching player found.';
     return;
   }
+  elements.searchStatus.textContent = players.length === 20
+    ? 'Showing up to 20 matches. Type more letters to narrow your search.'
+    : `${players.length} ${players.length === 1 ? 'player' : 'players'} found.`;
   for (const player of players) {
     const option = document.createElement('button');
     option.type = 'button';
     option.className = `person-option${selectedPlayer?.id === player.id ? ' selected' : ''}`;
+    option.setAttribute('aria-pressed', String(selectedPlayer?.id === player.id));
     option.append(avatar(player));
     const info = document.createElement('span');
     info.className = 'person-info';
@@ -120,23 +133,24 @@ function renderResults(players, message = '') {
       elements.selected.textContent = `Selected: ${player.name} · ${player.skillLevel || 'Player'}`;
       elements.selected.hidden = false;
       elements.existingSubmit.disabled = false;
-      renderResults(players);
+      for (const result of elements.results.querySelectorAll('.person-option')) {
+        const chosen = result === option;
+        result.classList.toggle('selected', chosen);
+        result.setAttribute('aria-pressed', String(chosen));
+      }
     });
     elements.results.append(option);
   }
 }
 
-async function performSearch() {
-  const query = elements.search.value.trim();
+function clearSelectedPlayer() {
   selectedPlayer = null;
   elements.selected.hidden = true;
+  elements.selected.textContent = '';
   elements.existingSubmit.disabled = true;
-  const sequence = ++searchSequence;
-  if (query.length < 2) {
-    renderResults([], 'Start typing at least two letters to search.');
-    return;
-  }
-  renderResults([], 'Searching…');
+}
+
+async function performSearch(query, sequence) {
   try {
     const { players = [] } = await searchPlayers(query);
     if (sequence === searchSequence) renderResults(players);
@@ -151,15 +165,18 @@ function switchTab(kind) {
   elements.newTab.classList.toggle('active', !existing);
   elements.existingTab.setAttribute('aria-selected', String(existing));
   elements.newTab.setAttribute('aria-selected', String(!existing));
+  elements.existingTab.tabIndex = existing ? 0 : -1;
+  elements.newTab.tabIndex = existing ? -1 : 0;
   elements.existingPanel.hidden = !existing;
   elements.newPanel.hidden = existing;
   clearAlert();
-  (existing ? elements.search : elements.newName).focus();
 }
 
 function showSuccess(entry) {
+  const wasHidden = elements.success.hidden;
   elements.joinBody.hidden = true;
   elements.success.hidden = false;
+  const status = entry?.status || 'pending';
   const paragraph = elements.success.querySelector('p');
   if (entry?.status === 'waitlisted' || entry?.status === 'waitlist') {
     elements.successTitle.textContent = 'You’re on the waitlist';
@@ -174,7 +191,8 @@ function showSuccess(entry) {
     elements.successTitle.textContent = 'Request sent!';
     paragraph.textContent = 'Your signup is awaiting organizer review. Once approved, you’ll have a confirmed spot or a place on the waitlist.';
   }
-  elements.success.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  if (wasHidden || status !== lastSuccessStatus) elements.successTitle.focus();
+  lastSuccessStatus = status;
 }
 
 async function handleSignup(details, button) {
@@ -191,7 +209,12 @@ async function handleSignup(details, button) {
       if (session) updateSession(session);
     } catch { /* The request was saved; counts can refresh on the next visit. */ }
   } catch (error) {
-    showAlert(error.message || 'Could not send the request. Please try again.');
+    if (error?.code === 'permission-denied' && currentSession) {
+      updateSession({ ...currentSession, open: false });
+      showAlert('This signup link has closed. Ask the organizer for the next session link.');
+    } else {
+      showAlert(error.message || 'Could not send the request. Please try again.');
+    }
   } finally {
     button.innerHTML = oldText;
     button.disabled = button === elements.existingSubmit ? !selectedPlayer : false;
@@ -225,9 +248,32 @@ async function compressPhoto(file) {
 
 elements.existingTab.addEventListener('click', () => switchTab('existing'));
 elements.newTab.addEventListener('click', () => switchTab('new'));
+for (const tab of [elements.existingTab, elements.newTab]) {
+  tab.addEventListener('keydown', (event) => {
+    const tabs = [elements.existingTab, elements.newTab];
+    const index = tabs.indexOf(tab);
+    let nextIndex;
+    if (event.key === 'ArrowRight') nextIndex = (index + 1) % tabs.length;
+    else if (event.key === 'ArrowLeft') nextIndex = (index - 1 + tabs.length) % tabs.length;
+    else if (event.key === 'Home') nextIndex = 0;
+    else if (event.key === 'End') nextIndex = tabs.length - 1;
+    else return;
+    event.preventDefault();
+    switchTab(nextIndex === 0 ? 'existing' : 'new');
+    tabs[nextIndex].focus();
+  });
+}
 elements.search.addEventListener('input', () => {
   clearTimeout(searchTimer);
-  searchTimer = setTimeout(performSearch, 260);
+  const sequence = ++searchSequence;
+  clearSelectedPlayer();
+  const query = elements.search.value.trim();
+  if (query.length < 2) {
+    renderResults([], 'Start typing at least two letters to search.');
+    return;
+  }
+  renderResults([], 'Searching…');
+  searchTimer = setTimeout(() => performSearch(query, sequence), 260);
 });
 elements.existingSubmit.addEventListener('click', async () => {
   if (!selectedPlayer) return;
@@ -296,7 +342,11 @@ if (!token) {
     updateSession(session);
     await watchMySignup(session.id, (entryOrError) => {
       if (entryOrError instanceof Error) {
-        showAlert(entryOrError.message);
+        if (entryOrError.code === 'permission-denied') {
+          updateSession({ ...currentSession, open: false });
+        } else {
+          showAlert(entryOrError.message);
+        }
       } else if (entryOrError) {
         showSuccess(entryOrError);
       }

@@ -15,6 +15,7 @@ import {
   getDoc,
   getDocFromServer,
   getDocs,
+  getDocsFromServer,
   getFirestore,
   connectFirestoreEmulator,
   limit,
@@ -24,8 +25,7 @@ import {
   runTransaction,
   serverTimestamp,
   setDoc,
-  startAt,
-  endAt,
+  Timestamp,
   where,
 } from 'firebase/firestore';
 import { firebaseConfig } from './firebaseConfig.js';
@@ -87,6 +87,23 @@ function validDate(value) {
   return value;
 }
 
+export function sessionClosesAt(date) {
+  validDate(date);
+  // Manila is UTC+08:00 without daylight saving time. 16:00 UTC on the
+  // selected date is midnight at the start of the following Manila day.
+  return new Date(`${date}T16:00:00.000Z`);
+}
+
+function searchPrefixes(name) {
+  const lower = name.toLocaleLowerCase().trim().replace(/\s+/g, ' ');
+  const surname = lower.split(' ').at(-1);
+  const prefixes = new Set();
+  for (const value of [lower, surname]) {
+    for (let size = 2; size <= value.length; size += 1) prefixes.add(value.slice(0, size));
+  }
+  return [...prefixes];
+}
+
 function validName(value) {
   const name = String(value || '').trim().replace(/\s+/g, ' ');
   if (name.length < 2 || name.length > 60) throw error('Name must be 2 to 60 characters.');
@@ -142,6 +159,7 @@ function normalizedSession(snapshot) {
     waitlistCount: value.waitlistCount || 0,
     spotsLeft: Math.max(0, capacity - confirmedCount),
     open: value.open === true,
+    closesAt: timestamp(value.closesAt),
     createdAt: timestamp(value.createdAt),
     archivedAt: timestamp(value.archivedAt),
   };
@@ -179,6 +197,9 @@ function normalizedEntry(snapshot, players = new Map()) {
     checkedIn: value.checkedIn === true,
     source: value.source,
     ownerUid: value.ownerUid || null,
+    wins: value.wins || 0,
+    losses: value.losses || 0,
+    recentMatches: Array.isArray(value.recentMatches) ? value.recentMatches : [],
     createdAt: timestamp(value.createdAt),
     approvedAt: timestamp(value.approvedAt),
     reviewedAt: timestamp(value.reviewedAt),
@@ -212,7 +233,7 @@ export function watchAuth(callback) {
   }
 }
 
-async function ensurePublicAuth() {
+export async function ensurePublicAuth() {
   const current = await authReady();
   if (current) return current;
   if (!publicAuthPromise) {
@@ -254,7 +275,7 @@ export async function signOutOrganizer() { initializeClient(); await signOut(aut
 
 function newSession(date, cycle, capacity = 32) {
   return {
-    date, cycle, capacity, confirmedCount: 0, checkedInCount: 0,
+    date, cycle, capacity, closesAt: Timestamp.fromDate(sessionClosesAt(date)), confirmedCount: 0, checkedInCount: 0,
     waitlistCount: 0, activeGameCount: 0, open: true, createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(), archivedAt: null,
   };
@@ -278,21 +299,39 @@ export async function getCurrentSession(date = todayManila()) {
 
 export async function getPublicSession(sessionId) {
   await ensurePublicAuth();
-  const snapshot = await getDoc(sessionRef(String(sessionId || '')));
+  let snapshot;
+  try {
+    snapshot = await getDocFromServer(sessionRef(String(sessionId || '')));
+  } catch (cause) {
+    if (cause.code === 'permission-denied') throw error('This signup link has expired or is closed.', 'not-found');
+    throw cause;
+  }
   if (!snapshot.exists()) throw error('This signup link has expired or is closed.', 'not-found');
   return { session: normalizedSession(snapshot) };
 }
 
 export async function searchPlayers(text) {
   await ensurePublicAuth();
-  const needle = String(text || '').trim().toLocaleLowerCase();
+  const needle = String(text || '').trim().replace(/\s+/g, ' ').toLocaleLowerCase();
   if (needle.length < 2) return { players: [] };
-  const results = await getDocs(query(
-    collection(db, 'playerDirectory'),
-    orderBy('nameLower'),
-    startAt(needle), endAt(`${needle}\uf8ff`), limit(20),
+  const results = await getDocsFromServer(query(
+    collection(db, 'playerDirectory'), where('active', '==', true), limit(512),
   ));
-  return { players: results.docs.map(normalizedPlayer) };
+  const players = results.docs.map(normalizedPlayer)
+    .filter((player) => searchPrefixes(player.name).includes(needle))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return { players: players.slice(0, 20) };
+}
+
+export async function searchAdminPlayers(text = '') {
+  await ensureOrganizer();
+  const needle = String(text || '').trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+  if (needle && needle.length < 2) return { players: [], hasMore: false };
+  const results = await getDocsFromServer(query(collection(db, 'players'), where('active', '==', true)));
+  const players = results.docs.map(normalizedPlayer)
+    .filter((player) => !needle || searchPrefixes(player.name).includes(needle))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return { players: players.slice(0, 40), hasMore: players.length > 40 };
 }
 
 export async function submitSignup({ sessionId, playerId = null, name, skillLevel, division = 'unspecified', photoData = null }) {
@@ -303,7 +342,7 @@ export async function submitSignup({ sessionId, playerId = null, name, skillLeve
   let selectedSkill;
   let selectedDivision;
   if (playerId) {
-    const player = await getDoc(playerRef(playerId));
+    const player = await getDocFromServer(directoryRef(playerId));
     if (!player.exists() || player.data().active !== true) throw error('Select a listed player.');
     selectedName = player.data().name;
     selectedSkill = player.data().skillLevel;
@@ -348,38 +387,36 @@ export async function watchMySignup(sessionId, callback) {
 }
 
 async function listEntries(sessionId, players = new Map()) {
-  const snapshots = await getDocs(query(
-    collection(db, 'sessions', sessionId, 'entries'), orderBy('createdAt', 'asc'),
-  ));
-  return snapshots.docs.map((snapshot) => normalizedEntry(snapshot, players));
+  const snapshots = await getDocs(collection(db, 'sessions', sessionId, 'entries'));
+  return snapshots.docs.filter((item) =>
+    ['pending', 'confirmed', 'waitlisted', 'waitlist'].includes(item.data().status))
+    .sort((a, b) => timestampMillis(a.data().createdAt) - timestampMillis(b.data().createdAt))
+    .map((snapshot) => normalizedEntry(snapshot, players));
 }
 
-async function listPlayers() {
-  const snapshots = await getDocs(query(collection(db, 'players'), orderBy('nameLower', 'asc')));
-  return snapshots.docs.map(normalizedPlayer);
+function timestampMillis(value) {
+  return typeof value?.toMillis === 'function' ? value.toMillis() : 0;
 }
 
 export async function getAdminDashboard(date = todayManila()) {
   await ensureOrganizer();
   const session = await getCurrentSession(date);
-  const players = await listPlayers();
-  const entries = await listEntries(session.id, new Map(players.map((player) => [player.id, player])));
-  return { session: summarize(session, entries), entries, players };
+  await reconcileWaitlist(session.id);
+  const entries = await listEntries(session.id);
+  return { session: summarize(normalizedSession(await getDoc(sessionRef(session.id))), entries), entries };
 }
 
 export async function watchAdminDashboard(callback, date = todayManila()) {
   await ensureOrganizer();
-  await getCurrentSession(date);
+  const current = await getCurrentSession(date);
+  await reconcileWaitlist(current.id);
   let stopSession = () => {};
   let stopEntries = () => {};
   let session = null;
   let entries = [];
-  let players = [];
   let currentSessionId = null;
-  const emit = () => { if (session) callback({ session: summarize(session, entries), entries, players }); };
+  const emit = () => { if (session) callback({ session: summarize(session, entries), entries }); };
   const onError = (cause) => callback({ error: cause });
-  const stopPlayers = onSnapshot(query(collection(db, 'players'), orderBy('nameLower', 'asc')),
-    (snapshot) => { players = snapshot.docs.map(normalizedPlayer); emit(); }, onError);
   const stopPointer = onSnapshot(dayRef(date), (pointer) => {
     if (!pointer.exists()) return;
     const nextId = pointer.data().currentSessionId;
@@ -390,18 +427,41 @@ export async function watchAdminDashboard(callback, date = todayManila()) {
     stopSession = onSnapshot(sessionRef(nextId), (snapshot) => {
       session = normalizedSession(snapshot); emit();
     }, onError);
-    stopEntries = onSnapshot(query(collection(db, 'sessions', nextId, 'entries'), orderBy('createdAt', 'asc')),
+    stopEntries = onSnapshot(collection(db, 'sessions', nextId, 'entries'),
       (snapshot) => {
-        const map = new Map(players.map((player) => [player.id, player]));
-        entries = snapshot.docs.map((item) => normalizedEntry(item, map));
+        entries = snapshot.docs.filter((item) =>
+          ['pending', 'confirmed', 'waitlisted', 'waitlist'].includes(item.data().status))
+          .sort((a, b) => timestampMillis(a.data().createdAt) - timestampMillis(b.data().createdAt))
+          .map((item) => normalizedEntry(item));
         emit();
       }, onError);
   }, onError);
-  return () => { stopPointer(); stopSession(); stopEntries(); stopPlayers(); };
+  return () => { stopPointer(); stopSession(); stopEntries(); };
+}
+
+async function previousClosedEntry(sessionId, playerId) {
+  const results = await getDocsFromServer(query(
+    collection(db, 'sessions', sessionId, 'entries'), where('playerId', '==', playerId),
+  ));
+  return results.docs.filter((entry) => ['checked_out', 'removed'].includes(entry.data().status))
+    .sort((a, b) => timestampMillis(b.data().createdAt) - timestampMillis(a.data().createdAt))[0] || null;
+}
+
+function matchSummary(entry) {
+  const value = entry?.data() || {};
+  return {
+    wins: Number.isInteger(value.wins) && value.wins >= 0 ? value.wins : 0,
+    losses: Number.isInteger(value.losses) && value.losses >= 0 ? value.losses : 0,
+    recentMatches: Array.isArray(value.recentMatches) ? value.recentMatches.slice(0, 4) : [],
+  };
 }
 
 export async function approveEntry(sessionId, entryId) {
   await ensureOrganizer();
+  const pending = await getDocFromServer(entryRef(sessionId, entryId));
+  if (!pending.exists() || pending.data().status !== 'pending') throw error('This request is no longer pending.');
+  const priorEntry = pending.data().playerId
+    ? await previousClosedEntry(sessionId, pending.data().playerId) : null;
   const result = await runTransaction(db, async (transaction) => {
     const sRef = sessionRef(sessionId);
     const eRef = entryRef(sessionId, entryId);
@@ -409,6 +469,7 @@ export async function approveEntry(sessionId, entryId) {
     if (!session.exists() || !session.data().open) throw error('This session is closed.');
     if (!entry.exists() || entry.data().status !== 'pending') throw error('This request is no longer pending.');
     const request = entry.data();
+    if (request.playerId !== pending.data().playerId) throw error('This request changed. Try again.', 'aborted');
     const existingPlayer = request.playerId ? playerRef(request.playerId) : null;
     const freshPlayer = existingPlayer || doc(collection(db, 'players'));
     const player = existingPlayer ? await transaction.get(existingPlayer) : null;
@@ -418,12 +479,16 @@ export async function approveEntry(sessionId, entryId) {
     const claim = claimRef(sessionId, freshPlayer.id);
     const currentClaim = existingPlayer ? await transaction.get(claim) : null;
     if (currentClaim?.exists()) throw error('This player already has a reservation or waitlist place.', 'already-exists');
+    const prior = priorEntry ? await transaction.get(priorEntry.ref) : null;
+    const summary = prior?.exists() && ['checked_out', 'removed'].includes(prior.data().status)
+      ? matchSummary(prior) : matchSummary(null);
     const confirmed = session.data().confirmedCount < session.data().capacity;
     const status = confirmed ? 'confirmed' : 'waitlisted';
     if (!existingPlayer) {
       const name = validName(request.name);
       const profile = {
-        name, nameLower: name.toLocaleLowerCase(), skillLevel: validSkill(request.skillLevel),
+        name, nameLower: name.toLocaleLowerCase(), searchPrefixes: searchPrefixes(name),
+        skillLevel: validSkill(request.skillLevel),
         division: validDivision(request.division),
         photoData: validPhoto(request.photoData), active: true, wins: 0, losses: 0,
         createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
@@ -431,6 +496,7 @@ export async function approveEntry(sessionId, entryId) {
       transaction.set(freshPlayer, profile);
       transaction.set(directoryRef(freshPlayer.id), {
         name: profile.name, nameLower: profile.nameLower,
+        searchPrefixes: profile.searchPrefixes, active: true,
         skillLevel: profile.skillLevel, division: profile.division,
         photoData: profile.photoData,
       });
@@ -440,6 +506,7 @@ export async function approveEntry(sessionId, entryId) {
       transaction.set(directoryRef(freshPlayer.id), {
         name: player.data().name,
         nameLower: player.data().nameLower || player.data().name.toLocaleLowerCase(),
+        searchPrefixes: searchPrefixes(player.data().name), active: true,
         skillLevel: player.data().skillLevel,
         division: player.data().division || 'unspecified',
         photoData,
@@ -448,6 +515,7 @@ export async function approveEntry(sessionId, entryId) {
     transaction.set(claim, { entryId, createdAt: serverTimestamp() });
     transaction.update(eRef, {
       playerId: freshPlayer.id, status, approvedAt: serverTimestamp(),
+      ...summary,
       reviewedAt: serverTimestamp(), updatedAt: serverTimestamp(),
     });
     transaction.update(sRef, {
@@ -461,11 +529,13 @@ export async function approveEntry(sessionId, entryId) {
 }
 
 async function promoteOldest(sessionId) {
-  for (let attempts = 0; attempts < 5; attempts += 1) {
-    const candidates = await getDocs(query(
-      collection(db, 'sessions', sessionId, 'entries'), orderBy('createdAt', 'asc'),
+  for (let attempts = 0; attempts < 8; attempts += 1) {
+    const candidates = await getDocsFromServer(query(
+      collection(db, 'sessions', sessionId, 'entries'),
+      where('status', '==', 'waitlisted'),
     ));
-    const candidate = candidates.docs.find((item) => item.data().status === 'waitlisted');
+    const candidate = candidates.docs.sort((a, b) =>
+      timestampMillis(a.data().createdAt) - timestampMillis(b.data().createdAt))[0];
     if (!candidate) return null;
     try {
       return await runTransaction(db, async (transaction) => {
@@ -473,7 +543,7 @@ async function promoteOldest(sessionId) {
         const eRef = entryRef(sessionId, candidate.id);
         const [session, entry] = await Promise.all([transaction.get(sRef), transaction.get(eRef)]);
         if (!session.exists() || !session.data().open || session.data().confirmedCount >= session.data().capacity) return null;
-        if (!entry.exists() || entry.data().status !== 'waitlisted') throw error('Waitlist changed.', 'aborted');
+        if (!entry.exists() || entry.data().status !== 'waitlisted') throw error('Waitlist changed.', 'stale-candidate');
         transaction.update(eRef, { status: 'confirmed', updatedAt: serverTimestamp() });
         transaction.update(sRef, {
           confirmedCount: session.data().confirmedCount + 1,
@@ -483,51 +553,79 @@ async function promoteOldest(sessionId) {
         return candidate.id;
       });
     } catch (cause) {
-      if (cause.code !== 'aborted') throw cause;
+      if (cause.code !== 'stale-candidate') throw cause;
     }
   }
-  return null;
+  throw error('The waitlist changed repeatedly. Try again.', 'aborted');
 }
 
-async function fillOpenSpots(sessionId) {
+export async function reconcileWaitlist(sessionId) {
+  await ensureOrganizer();
+  let promotedCount = 0;
   for (let n = 0; n < 512; n += 1) {
     const promoted = await promoteOldest(sessionId);
     if (!promoted) break;
+    promotedCount += 1;
   }
+  return { promotedCount };
 }
 
 async function closeEntry(sessionId, entryId, status) {
   await ensureOrganizer();
-  const freed = await runTransaction(db, async (transaction) => {
-    const sRef = sessionRef(sessionId);
-    const eRef = entryRef(sessionId, entryId);
-    const [session, entry] = await Promise.all([transaction.get(sRef), transaction.get(eRef)]);
-    if (!session.exists() || !entry.exists()) throw error('Reservation not found.', 'not-found');
-    const prior = entry.data();
-    if (!['pending', 'confirmed', 'waitlisted'].includes(prior.status)) {
-      throw error('This request is already closed.');
+  for (let attempts = 0; attempts < 8; attempts += 1) {
+    const before = await getDocFromServer(entryRef(sessionId, entryId));
+    if (!before.exists()) throw error('Reservation not found.', 'not-found');
+    const shouldPromote = before.data().status === 'confirmed';
+    const candidates = shouldPromote ? await getDocsFromServer(query(
+      collection(db, 'sessions', sessionId, 'entries'),
+      where('status', '==', 'waitlisted'),
+    )) : null;
+    const candidateRef = candidates?.docs.sort((a, b) =>
+      timestampMillis(a.data().createdAt) - timestampMillis(b.data().createdAt))[0]?.ref || null;
+    try {
+      await runTransaction(db, async (transaction) => {
+        const sRef = sessionRef(sessionId);
+        const eRef = entryRef(sessionId, entryId);
+        const [session, entry, candidate] = await Promise.all([
+          transaction.get(sRef), transaction.get(eRef),
+          candidateRef ? transaction.get(candidateRef) : Promise.resolve(null),
+        ]);
+        if (!session.exists() || !entry.exists()) throw error('Reservation not found.', 'not-found');
+        const prior = entry.data();
+        if (!['pending', 'confirmed', 'waitlisted'].includes(prior.status)) {
+          throw error('This request is already closed.');
+        }
+        const wasConfirmed = prior.status === 'confirmed';
+        const wasWaitlisted = prior.status === 'waitlisted';
+        if (wasConfirmed !== shouldPromote ||
+            (wasConfirmed && !candidateRef && (session.data().waitlistCount || 0) > 0) ||
+            (wasConfirmed && candidateRef && (!candidate?.exists() || candidate.data().status !== 'waitlisted'))) {
+          throw error('Waitlist changed.', 'stale-candidate');
+        }
+        const claim = prior.playerId && (wasConfirmed || wasWaitlisted) ? claimRef(sessionId, prior.playerId) : null;
+        const lock = prior.playerId && wasConfirmed ? await transaction.get(playerLockRef(sessionId, prior.playerId)) : null;
+        if (lock?.exists()) throw error('Replace or finish this player\'s game first.');
+        const existingClaim = claim ? await transaction.get(claim) : null;
+        const promoted = wasConfirmed && session.data().open === true && candidate?.exists();
+        transaction.update(eRef, {
+          status, checkedIn: false, checkedOutAt: status === 'checked_out' ? serverTimestamp() : prior.checkedOutAt || null,
+          reviewedAt: serverTimestamp(), updatedAt: serverTimestamp(),
+        });
+        if (existingClaim?.exists() && existingClaim.data().entryId === entryId) transaction.delete(claim);
+        if (promoted) transaction.update(candidateRef, { status: 'confirmed', updatedAt: serverTimestamp() });
+        transaction.update(sRef, {
+          confirmedCount: session.data().confirmedCount - (wasConfirmed ? 1 : 0) + (promoted ? 1 : 0),
+          checkedInCount: (session.data().checkedInCount || 0) - (wasConfirmed && prior.checkedIn ? 1 : 0),
+          waitlistCount: (session.data().waitlistCount || 0) - (wasWaitlisted ? 1 : 0) - (promoted ? 1 : 0),
+          updatedAt: serverTimestamp(),
+        });
+      });
+      return { status };
+    } catch (cause) {
+      if (cause.code !== 'stale-candidate') throw cause;
     }
-    const wasConfirmed = prior.status === 'confirmed';
-    const wasWaitlisted = prior.status === 'waitlisted';
-    const claim = prior.playerId && (wasConfirmed || wasWaitlisted) ? claimRef(sessionId, prior.playerId) : null;
-    const lock = prior.playerId && wasConfirmed ? await transaction.get(playerLockRef(sessionId, prior.playerId)) : null;
-    if (lock?.exists()) throw error('Replace or finish this player\'s game first.');
-    const existingClaim = claim ? await transaction.get(claim) : null;
-    transaction.update(eRef, {
-      status, checkedIn: false, checkedOutAt: status === 'checked_out' ? serverTimestamp() : prior.checkedOutAt || null,
-      reviewedAt: serverTimestamp(), updatedAt: serverTimestamp(),
-    });
-    if (existingClaim?.exists() && existingClaim.data().entryId === entryId) transaction.delete(claim);
-    transaction.update(sRef, {
-      confirmedCount: session.data().confirmedCount - (wasConfirmed ? 1 : 0),
-      checkedInCount: (session.data().checkedInCount || 0) - (wasConfirmed && prior.checkedIn ? 1 : 0),
-      waitlistCount: (session.data().waitlistCount || 0) - (wasWaitlisted ? 1 : 0),
-      updatedAt: serverTimestamp(),
-    });
-    return wasConfirmed;
-  });
-  if (freed) await promoteOldest(sessionId);
-  return { status };
+  }
+  throw error('The waitlist changed repeatedly. Try again.', 'aborted');
 }
 
 export async function rejectEntry(sessionId, entryId) { return closeEntry(sessionId, entryId, 'rejected'); }
@@ -554,6 +652,7 @@ export async function checkInEntry(sessionId, entryId) {
 export async function reservePlayer(sessionId, playerId) {
   await ensureOrganizer();
   const id = doc(collection(db, 'sessions', sessionId, 'entries')).id;
+  const priorEntry = await previousClosedEntry(sessionId, playerId);
   const result = await runTransaction(db, async (transaction) => {
     const sRef = sessionRef(sessionId);
     const pRef = playerRef(playerId);
@@ -564,6 +663,9 @@ export async function reservePlayer(sessionId, playerId) {
     if (!session.exists() || !session.data().open) throw error('This session is closed.');
     if (!player.exists() || player.data().active !== true) throw error('Player not found.');
     if (existingClaim.exists()) throw error('This player already has a reservation or waitlist place.', 'already-exists');
+    const prior = priorEntry ? await transaction.get(priorEntry.ref) : null;
+    const summary = prior?.exists() && ['checked_out', 'removed'].includes(prior.data().status)
+      ? matchSummary(prior) : matchSummary(null);
     const confirmed = session.data().confirmedCount < session.data().capacity;
     const status = confirmed ? 'confirmed' : 'waitlisted';
     transaction.set(entryRef(sessionId, id), {
@@ -571,6 +673,7 @@ export async function reservePlayer(sessionId, playerId) {
       name: player.data().name, skillLevel: player.data().skillLevel,
       division: player.data().division || 'unspecified',
       photoData: player.data().photoData || null,
+      ...summary,
       status, checkedIn: false, source: 'organizer',
       createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
       approvedAt: serverTimestamp(), reviewedAt: serverTimestamp(),
@@ -585,6 +688,56 @@ export async function reservePlayer(sessionId, playerId) {
     return { id, status };
   });
   return { entry: result };
+}
+
+export async function createAndReservePlayer({ sessionId, name, skillLevel, division = 'unspecified', photoData = null }) {
+  await ensureOrganizer();
+  const playerName = validName(name);
+  const skill = validSkill(skillLevel);
+  const playerDivision = validDivision(division);
+  const photo = validPhoto(photoData);
+  const pRef = doc(collection(db, 'players'));
+  const eRef = doc(collection(db, 'sessions', sessionId, 'entries'));
+  const result = await runTransaction(db, async (transaction) => {
+    const sRef = sessionRef(sessionId);
+    const session = await transaction.get(sRef);
+    if (!session.exists() || !session.data().open) throw error('This session is closed.');
+    const confirmed = session.data().confirmedCount < session.data().capacity;
+    const status = confirmed ? 'confirmed' : 'waitlisted';
+    const profile = {
+      name: playerName, nameLower: playerName.toLocaleLowerCase(),
+      searchPrefixes: searchPrefixes(playerName), skillLevel: skill,
+      division: playerDivision, photoData: photo, active: true,
+      wins: 0, losses: 0,
+      createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    };
+    transaction.set(pRef, profile);
+    transaction.set(directoryRef(pRef.id), {
+      name: profile.name, nameLower: profile.nameLower,
+      searchPrefixes: profile.searchPrefixes,
+      skillLevel: skill, division: playerDivision,
+      photoData: photo, active: true,
+    });
+    transaction.set(eRef, {
+      sessionId, ownerUid: null, playerId: pRef.id,
+      name: playerName, skillLevel: skill, division: playerDivision,
+      photoData: photo, wins: 0, losses: 0, recentMatches: [],
+      status, checkedIn: false, source: 'organizer',
+      createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+      approvedAt: serverTimestamp(), reviewedAt: serverTimestamp(),
+      checkedInAt: null, checkedOutAt: null,
+    });
+    transaction.set(claimRef(sessionId, pRef.id), {
+      entryId: eRef.id, createdAt: serverTimestamp(),
+    });
+    transaction.update(sRef, {
+      confirmedCount: session.data().confirmedCount + (confirmed ? 1 : 0),
+      waitlistCount: (session.data().waitlistCount || 0) + (confirmed ? 0 : 1),
+      updatedAt: serverTimestamp(),
+    });
+    return { id: eRef.id, status };
+  });
+  return { playerId: pRef.id, entry: result };
 }
 
 export async function updatePlayer(playerId, changes, sessionId = null) {
@@ -610,9 +763,11 @@ export async function updatePlayer(playerId, changes, sessionId = null) {
     transaction.set(directoryRef(playerId), {
       name: player.data().name,
       nameLower: player.data().nameLower || player.data().name.toLocaleLowerCase(),
+      searchPrefixes: searchPrefixes(player.data().name),
       skillLevel: patch.skillLevel || player.data().skillLevel,
       division: patch.division || player.data().division || 'unspecified',
       photoData: player.data().photoData || null,
+      active: player.data().active !== false,
     }, { merge: true });
     // Court eligibility is read from the active session entry. Keep that
     // snapshot aligned with an organizer's profile edit for this session.
@@ -637,7 +792,7 @@ export async function updateSession(sessionId, { capacity }) {
     }
     transaction.update(sRef, { capacity: size, updatedAt: serverTimestamp() });
   });
-  await fillOpenSpots(sessionId);
+  await reconcileWaitlist(sessionId);
   return { session: normalizedSession(await getDoc(sessionRef(sessionId))) };
 }
 

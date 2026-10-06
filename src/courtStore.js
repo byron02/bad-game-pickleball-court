@@ -5,9 +5,13 @@ import {
   getDoc,
   getDocs,
   getFirestore,
+  limit,
   onSnapshot,
+  orderBy,
+  query,
   runTransaction,
   serverTimestamp,
+  where,
 } from 'firebase/firestore';
 import { firebaseConfig } from './firebaseConfig.js';
 import { getCurrentUser } from './firebaseStore.js';
@@ -116,6 +120,31 @@ function sortedGames(snapshots) {
     (b.startedAt || '').localeCompare(a.startedAt || ''));
 }
 
+function gamesCollection(sessionId) {
+  return collection(db, 'sessions', idOf(sessionId, 'Session id'), 'games');
+}
+
+function activeGamesQuery(sessionId) {
+  return query(gamesCollection(sessionId), where('status', '==', 'active'));
+}
+
+function recentResultsQuery(sessionId) {
+  // Every completed game has completedAt. A single-field descending index
+  // puts incomplete games (whose value is null) after the recent results.
+  return query(gamesCollection(sessionId), orderBy('completedAt', 'desc'), limit(10));
+}
+
+function recentResults(snapshot) {
+  return snapshot.docs.map(normalizedGame)
+    .filter((game) => game.status === 'completed' && game.result?.winnerSide);
+}
+
+function mergeVisibleGames(active, results) {
+  const byId = new Map([...active, ...results].map((game) => [game.id, game]));
+  return [...byId.values()].sort((a, b) =>
+    (b.completedAt || b.startedAt || '').localeCompare(a.completedAt || a.startedAt || ''));
+}
+
 /** Reusable physical courts; all access is organizer-only. */
 export async function listCourts() {
   await ensureOrganizer();
@@ -176,17 +205,41 @@ export async function deleteCourt(courtId) {
   return { deleted: true };
 }
 
-/** Current and historical games for a single day session. */
+/** Active games and the ten most recent results for a single day session. */
 export async function listCourtGames(sessionId) {
   await ensureOrganizer();
-  return { games: sortedGames(await getDocs(collection(db, 'sessions', idOf(sessionId, 'Session id'), 'games'))) };
+  const [active, results] = await Promise.all([
+    getDocs(activeGamesQuery(sessionId)), getDocs(recentResultsQuery(sessionId)),
+  ]);
+  return { games: mergeVisibleGames(sortedGames(active), recentResults(results)) };
 }
 
 export async function watchCourtGames(sessionId, callback) {
   await ensureOrganizer();
-  return onSnapshot(collection(db, 'sessions', idOf(sessionId, 'Session id'), 'games'),
-    (snapshot) => callback({ games: sortedGames(snapshot) }),
-    (cause) => callback({ error: cause }));
+  let active = null;
+  let results = null;
+  let stopped = false;
+  let stopActive = () => {};
+  let stopResults = () => {};
+  const emit = () => {
+    if (!stopped && active && results) callback({ games: mergeVisibleGames(active, results) });
+  };
+  const fail = (cause) => {
+    if (stopped) return;
+    stopped = true;
+    stopActive();
+    stopResults();
+    callback({ error: cause });
+  };
+  stopActive = onSnapshot(activeGamesQuery(sessionId),
+    (snapshot) => { active = sortedGames(snapshot); emit(); }, fail);
+  stopResults = onSnapshot(recentResultsQuery(sessionId),
+    (snapshot) => { results = recentResults(snapshot); emit(); }, fail);
+  return () => {
+    stopped = true;
+    stopActive();
+    stopResults();
+  };
 }
 
 function domainPlayer(entry) {
@@ -217,39 +270,16 @@ function idsOf(lineup) {
   return ids;
 }
 
-function statsFromGames(entries, games, now = Date.now()) {
-  const byId = new Map(entries.filter((entry) => entry.playerId).map((entry) => [entry.playerId, {
+function statsFromEntry(entry, now = Date.now()) {
+  const recent = Array.isArray(entry.recentMatches) ? entry.recentMatches.slice(0, 4) : [];
+  const lastPlayedAt = millis(recent[0]?.completedAt);
+  return {
     ...domainPlayer(entry),
-    gamesPlayed: 0,
-    waitMinutes: Math.max(0, (now - millis(entry.checkedInAt)) / 60000),
-    recentPartnerIds: [],
-    recentOpponentIds: [],
-    lastPlayedAt: 0,
-  }]));
-  const completed = games.filter((game) => game.status === 'completed' && game.lineup)
-    .sort((a, b) => millis(b.completedAt) - millis(a.completedAt));
-  for (const game of completed) {
-    const a = game.lineup.sideA || [];
-    const b = game.lineup.sideB || [];
-    const ended = millis(game.completedAt);
-    for (const [teammates, opponents] of [[a, b], [b, a]]) {
-      for (const id of teammates) {
-        const player = byId.get(id);
-        if (!player) continue;
-        player.gamesPlayed += 1;
-        player.lastPlayedAt = Math.max(player.lastPlayedAt, ended);
-        if (player.gamesPlayed <= 4) {
-          player.recentPartnerIds.push(...teammates.filter((other) => other !== id));
-          player.recentOpponentIds.push(...opponents);
-        }
-      }
-    }
-  }
-  for (const player of byId.values()) {
-    if (player.lastPlayedAt) player.waitMinutes = Math.max(0, (now - player.lastPlayedAt) / 60000);
-    delete player.lastPlayedAt;
-  }
-  return [...byId.values()];
+    gamesPlayed: Math.max(0, Number(entry.wins || 0)) + Math.max(0, Number(entry.losses || 0)),
+    waitMinutes: Math.max(0, (now - (lastPlayedAt || millis(entry.checkedInAt))) / 60000),
+    recentPartnerIds: recent.flatMap((match) => match.partnerIds || []),
+    recentOpponentIds: recent.flatMap((match) => match.opponentIds || []),
+  };
 }
 
 /** Suggest (and re-suggest) teams without writing a game. */
@@ -258,18 +288,22 @@ export async function proposeCourtLineup({ sessionId, courtId, random = Math.ran
   const [court, session, entries, games] = await Promise.all([
     getDoc(courtRef(courtId)),
     getDoc(sessionRef(sessionId)),
-    getDocs(collection(db, 'sessions', idOf(sessionId, 'Session id'), 'entries')),
-    getDocs(collection(db, 'sessions', sessionId, 'games')),
+    getDocs(query(collection(db, 'sessions', idOf(sessionId, 'Session id'), 'entries'),
+      where('status', '==', 'confirmed'))),
+    getDocs(activeGamesQuery(sessionId)),
   ]);
   if (!court.exists()) throw error('Court not found.', 'not-found');
   if (!session.exists() || session.data().open !== true) throw error('This session is closed.');
-  const roster = entries.docs.map((snapshot) => snapshot.data());
-  const history = games.docs.map((snapshot) => ({ id: snapshot.id, ...snapshot.data() }));
-  const players = statsFromGames(roster, history);
+  // A player may have an older checked-out entry in this session. Only their
+  // current confirmed, checked-in reservation is eligible for a new draw.
+  const roster = entries.docs.map((snapshot) => snapshot.data())
+    .filter((entry) => entry.checkedIn === true && entry.playerId);
+  const activeGames = games.docs.map((snapshot) => ({ id: snapshot.id, ...snapshot.data() }));
+  const players = roster.map((entry) => statsFromEntry(entry));
   const lineup = proposeLineup({
     court: { id: court.id, ...court.data() },
     players,
-    activeGames: history,
+    activeGames,
     random,
   });
   const selected = lineup ? new Set(idsOf(lineup)) : new Set();
@@ -309,6 +343,12 @@ export async function startCourtGame({ sessionId, courtId, lineup }) {
       transaction.get(sessionRef(sessionId)), transaction.get(courtRef(courtId)),
     ]);
     if (!session.exists() || session.data().open !== true) throw error('This session is closed.');
+    if (session.data().kind === 'event') {
+      const event = await transaction.get(doc(db, 'events', sessionId));
+      if (!event.exists() || event.data().status !== 'in_progress' || event.data().kind !== 'open_play') {
+        throw error('Start this open-play event first.');
+      }
+    }
     if (!court.exists()) throw error('Court not found.', 'not-found');
     if (court.data().activeGameId) throw error('This court already has an active game.');
 
@@ -433,11 +473,12 @@ export async function replaceCourtPlayer({ sessionId, gameId, outgoingPlayerId, 
 
 /** Award final-lineup W/L counters and free the court in one transaction. */
 export async function completeCourtGame({ sessionId, gameId, winnerSide }) {
-  await ensureOrganizer();
+  const user = await ensureOrganizer();
   const reference = gameRef(sessionId, gameId);
   const result = await runTransaction(db, async (transaction) => {
     const game = await transaction.get(reference);
     if (!game.exists()) throw error('Game not found.', 'not-found');
+    if (game.data().eventMatchId) throw error('Record tournament results from the event desk.');
     const recorded = recordGameResult({
       game: { id: game.id, ...game.data() }, winnerSide,
     });
@@ -461,6 +502,7 @@ export async function completeCourtGame({ sessionId, gameId, winnerSide }) {
     const entries = await readLineupEntries(transaction, sessionId, ids);
     const players = await Promise.all(ids.map((id) => transaction.get(playerRef(id))));
     if (players.some((player) => !player.exists())) throw error('A player record is missing.');
+    const completedAt = new Date().toISOString();
 
     transaction.update(reference, {
       status: 'completed',
@@ -476,10 +518,38 @@ export async function completeCourtGame({ sessionId, gameId, winnerSide }) {
       activeGameCount: Math.max(0, (session.data().activeGameCount || 0) - 1),
       updatedAt: serverTimestamp(),
     });
+    if (session.data().kind === 'event') {
+      const eventMatch = {
+        stage: 'open_play', round: 0, slot: 0, sides: [null, null],
+        sideAPlayerIds: [...data.lineup.sideA],
+        sideBPlayerIds: [...data.lineup.sideB],
+        sideA: data.lineup.sideA.map((playerId) => ({ id: playerId, name: data.playerSnapshots?.[playerId]?.name || 'Player' })),
+        sideB: data.lineup.sideB.map((playerId) => ({ id: playerId, name: data.playerSnapshots?.[playerId]?.name || 'Player' })),
+        status: 'completed', winnerSide, winnerId: null, score: null,
+        courtId: data.courtId, courtName: data.courtName, gameId,
+        startedAt: data.startedAt, completedAt: serverTimestamp(),
+        createdAt: data.startedAt, updatedAt: serverTimestamp(),
+      };
+      transaction.set(doc(db, 'events', sessionId, 'matches', gameId), eventMatch);
+      transaction.set(doc(db, 'events', sessionId, 'publicMatches', gameId), eventMatch);
+      transaction.set(doc(collection(db, 'events', sessionId, 'audit')), {
+        action: 'record_open_play_game', gameId, winnerSide,
+        byUid: user.uid, at: serverTimestamp(),
+      });
+    }
     for (let i = 0; i < ids.length; i += 1) {
       const delta = recorded.statDeltas[ids[i]];
       const player = players[i].data();
       const entry = entries[i].data();
+      const teammates = data.lineup.sideA.includes(ids[i])
+        ? data.lineup.sideA : data.lineup.sideB;
+      const opponents = teammates === data.lineup.sideA
+        ? data.lineup.sideB : data.lineup.sideA;
+      const recentMatches = [{
+        completedAt,
+        partnerIds: teammates.filter((id) => id !== ids[i]),
+        opponentIds: [...opponents],
+      }, ...(Array.isArray(entry.recentMatches) ? entry.recentMatches : [])].slice(0, 4);
       transaction.update(playerRef(ids[i]), {
         wins: (player.wins || 0) + delta.wins,
         losses: (player.losses || 0) + delta.losses,
@@ -488,6 +558,7 @@ export async function completeCourtGame({ sessionId, gameId, winnerSide }) {
       transaction.update(entries[i].ref, {
         wins: (entry.wins || 0) + delta.wins,
         losses: (entry.losses || 0) + delta.losses,
+        recentMatches,
         updatedAt: serverTimestamp(),
       });
       transaction.delete(lockRef(sessionId, ids[i]));
@@ -504,6 +575,7 @@ export async function cancelCourtGame({ sessionId, gameId }) {
   const cancelled = await runTransaction(db, async (transaction) => {
     const game = await transaction.get(reference);
     if (!game.exists()) throw error('Game not found.', 'not-found');
+    if (game.data().eventMatchId) throw error('Cancel tournament matches from the event desk.');
     if (game.data().status === 'cancelled') return false;
     if (game.data().status !== 'active') throw error('A completed game cannot be cancelled.');
     const data = game.data();

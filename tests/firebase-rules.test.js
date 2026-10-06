@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebase/rules-unit-testing';
 import {
-  collection, doc, endAt, getDoc, getDocs, limit, orderBy, query, serverTimestamp,
-  setDoc, startAt, updateDoc,
+  collection, doc, getDoc, getDocs, limit, orderBy, query, serverTimestamp,
+  setDoc, updateDoc, where,
 } from 'firebase/firestore';
 
 // Run with:
@@ -13,8 +13,10 @@ import {
 const enabled = Boolean(process.env.FIRESTORE_EMULATOR_HOST);
 let env;
 const sessionId = 'random-shared-session-token';
+const sessionDate = '2099-01-01';
 const sessionData = (capacity = 32) => ({
-  date: '2026-10-05', cycle: 1, capacity, confirmedCount: 0,
+  date: sessionDate, closesAt: new Date('2099-01-01T16:00:00.000Z'),
+  cycle: 1, capacity, confirmedCount: 0,
   checkedInCount: 0, waitlistCount: 0, open: true,
   createdAt: new Date(), updatedAt: new Date(), archivedAt: null,
 });
@@ -74,6 +76,12 @@ test('existing-player claim must match the approved directory and cannot overwri
   { skip: !enabled }, async () => {
     await env.withSecurityRulesDisabled(async (context) => {
       await setDoc(doc(context.firestore(), 'players', 'ana'), playerData);
+      await setDoc(doc(context.firestore(), 'playerDirectory', 'ana'), {
+        name: playerData.name, nameLower: playerData.nameLower,
+        skillLevel: playerData.skillLevel, division: playerData.division,
+        photoData: null, active: true,
+        searchPrefixes: ['an', 'ana', 'ana cruz', 'cr', 'cru', 'cruz'],
+      });
     });
     const db = env.authenticatedContext('player-two', anonymous).firestore();
     const entry = doc(db, 'sessions', sessionId, 'entries', 'player-two');
@@ -92,7 +100,7 @@ test('unapproved users cannot change capacity, organizer access, or private cour
     await assertFails(setDoc(doc(db, 'organizers', 'intruder'), { active: true }));
     await assertFails(updateDoc(doc(db, 'sessions', sessionId), { capacity: 100 }));
     await assertFails(setDoc(doc(db, 'courts', 'court-1'), { name: 'Court 1' }));
-    await assertFails(getDoc(doc(db, 'daySessions', '2026-10-05')));
+    await assertFails(getDoc(doc(db, 'daySessions', sessionDate)));
   });
 
 test('organizer can approve within capacity, but invalid aggregate counts are rejected',
@@ -118,20 +126,23 @@ test('public search reads only the approved directory; full profiles and session
       });
       await setDoc(doc(context.firestore(), 'playerDirectory', 'ana'), {
         name: 'Ana Cruz', nameLower: 'ana cruz', skillLevel: 'intermediate',
-        division: 'woman', photoData: null,
+        division: 'woman', photoData: null, active: true,
+        searchPrefixes: ['an', 'ana', 'ana cruz', 'cr', 'cru', 'cruz'],
       });
     });
     const db = env.authenticatedContext('player-three', anonymous).firestore();
     const found = await assertSucceeds(getDocs(query(
-      collection(db, 'playerDirectory'), orderBy('nameLower'),
-      startAt('an'), endAt('an\uf8ff'), limit(20),
+      collection(db, 'playerDirectory'), where('active', '==', true), limit(512),
     )));
     assert.equal(found.docs.length, 1);
+    await assertSucceeds(getDoc(doc(db, 'playerDirectory', 'ana')));
     await assertFails(getDocs(collection(db, 'playerDirectory')));
     await assertFails(setDoc(doc(db, 'playerDirectory', 'intruder'), {
       name: 'Intruder', nameLower: 'intruder', skillLevel: 'advanced', division: 'man', photoData: null,
     }));
     await assertFails(getDocs(collection(db, 'players')));
+    await assertFails(getDoc(doc(db, 'players', 'ana')));
+    await assertFails(getDocs(query(collection(db, 'players'), where('active', '==', true), limit(20))));
     await assertFails(getDocs(collection(db, 'sessions')));
     await assertFails(getDocs(collection(db, 'sessions', sessionId, 'entries')));
     await assertFails(getDoc(doc(db, 'courts', 'court-1')));
@@ -143,4 +154,41 @@ test('closed signup links reject new requests', { skip: !enabled }, async () => 
   });
   const db = env.authenticatedContext('late-player', anonymous).firestore();
   await assertFails(setDoc(doc(db, 'sessions', sessionId, 'entries', 'late-player'), request('late-player')));
+});
+
+test('a dated link expires by server time even if its open flag remains true',
+  { skip: !enabled }, async () => {
+    await env.withSecurityRulesDisabled(async (context) => {
+      await updateDoc(doc(context.firestore(), 'sessions', sessionId), {
+        closesAt: new Date(Date.now() - 60_000),
+      });
+    });
+    const db = env.authenticatedContext('late-player', anonymous).firestore();
+    await assertFails(getDoc(doc(db, 'sessions', sessionId)));
+    await assertFails(setDoc(doc(db, 'sessions', sessionId, 'entries', 'late-player'), request('late-player')));
+  });
+
+test('event requests cannot list the same existing player twice', { skip: !enabled }, async () => {
+  await env.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await setDoc(doc(db, 'publicEvents', 'duplicate-player-event'), {
+      registrationOpen: true, closesAt: new Date('2099-01-01T16:00:00.000Z'),
+    });
+    await setDoc(doc(db, 'playerDirectory', 'ana'), {
+      name: playerData.name, nameLower: playerData.nameLower,
+      searchPrefixes: ['an', 'ana'], skillLevel: playerData.skillLevel,
+      division: playerData.division, photoData: null, active: true,
+    });
+  });
+  const db = env.authenticatedContext('duplicate-player', anonymous).firestore();
+  const player = {
+    playerId: 'ana', name: playerData.name, skillLevel: playerData.skillLevel,
+    division: playerData.division, photoData: null,
+  };
+  await assertFails(setDoc(doc(db, 'events', 'duplicate-player-event', 'registrations', 'duplicate-player'), {
+    ownerUid: 'duplicate-player', eventId: 'duplicate-player-event', players: [player, player],
+    teamName: 'Same person twice', status: 'pending', checkedIn: false, source: 'public',
+    playerIds: [], entryIds: [], createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(), reviewedAt: null,
+  }));
 });

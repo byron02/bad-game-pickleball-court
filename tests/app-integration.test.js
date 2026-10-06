@@ -31,7 +31,7 @@ test('signup approval, independent court start, and idempotent wins/losses',
     await adminDb.doc(`organizers/${organizer.uid}`).set({ active: true, email });
 
     await signup.signInOrganizer({ email, password });
-    const date = '2026-10-05';
+    const date = '2099-01-01';
     const firstSession = await signup.getCurrentSession(date);
     await signup.updateSession(firstSession.id, { capacity: 4 });
     await signup.signOutOrganizer();
@@ -46,7 +46,13 @@ test('signup approval, independent court start, and idempotent wins/losses',
     assert.equal(dashboard.entries.filter((entry) => entry.status === 'pending').length, 1);
     await signup.approveEntry(firstSession.id, dashboard.entries[0].id);
 
-    for (const [name, division] of [['Ana', 'woman'], ['Joemari', 'man'], ['Stef', 'man']]) {
+    const directAdd = await signup.createAndReservePlayer({
+      sessionId: firstSession.id, name: 'Ana', skillLevel: 'advanced', division: 'woman',
+    });
+    assert.equal(directAdd.entry.status, 'confirmed');
+    assert.equal((await adminDb.doc(`players/${directAdd.playerId}`).get()).data().name, 'Ana');
+    assert.equal((await adminDb.doc(`playerDirectory/${directAdd.playerId}`).get()).data().active, true);
+    for (const [name, division] of [['Joemari', 'man'], ['Stef', 'man']]) {
       const ref = adminDb.collection('players').doc();
       await ref.set({
         name, nameLower: name.toLowerCase(), skillLevel: 'advanced', division,
@@ -71,6 +77,19 @@ test('signup approval, independent court start, and idempotent wins/losses',
       name: `Other Court ${Date.now()}`, allowedSkills: ['advanced'],
       division: 'open', format: 'doubles',
     })).court;
+    let resolveCourtUpdate;
+    const courtUpdated = new Promise((resolve) => { resolveCourtUpdate = resolve; });
+    const stopWatchingCourts = await courts.watchCourts((snapshot) => {
+      if (snapshot.courts?.some((court) => court.id === court2.id && court.name === 'Updated by second organizer')) {
+        resolveCourtUpdate();
+      }
+    });
+    await adminDb.doc('courts/' + court2.id).update({ name: 'Updated by second organizer' });
+    await Promise.race([
+      courtUpdated,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Court listener did not receive the other organizer update.')), 5000)),
+    ]);
+    stopWatchingCourts();
     const lineup = {
       sideA: [playerIds.Jina, playerIds.Ana],
       sideB: [playerIds.Joemari, playerIds.Stef],
@@ -103,30 +122,96 @@ test('signup approval, independent court start, and idempotent wins/losses',
 
     await signup.signOutOrganizer();
     await signup.submitSignup({
-      sessionId: firstSession.id, name: 'Casey', skillLevel: 'intermediate', division: 'woman',
+      sessionId: firstSession.id, name: 'Casey Rivera', skillLevel: 'intermediate', division: 'woman',
     });
     await signup.signOutOrganizer();
     await signup.signInOrganizer({ email, password });
     dashboard = await signup.getAdminDashboard(date);
     assert.equal(dashboard.session.confirmedCount, 4, 'unreviewed signup does not take a spot');
-    const caseyRequest = dashboard.entries.find((entry) => entry.name === 'Casey');
+    const caseyRequest = dashboard.entries.find((entry) => entry.name === 'Casey Rivera');
     await signup.approveEntry(firstSession.id, caseyRequest.id);
     dashboard = await signup.getAdminDashboard(date);
-    assert.equal(dashboard.entries.find((entry) => entry.name === 'Casey').status, 'waitlisted');
+    assert.equal(dashboard.entries.find((entry) => entry.name === 'Casey Rivera').status, 'waitlisted');
     assert.equal(dashboard.session.confirmedCount, 4, 'the original four hold their reservations');
     assert.equal(dashboard.session.waitlistCount, 1);
     await signup.signOutOrganizer();
     const search = await signup.searchPlayers('cas');
     assert.equal(search.players.length, 1);
-    assert.equal(search.players[0].name, 'Casey');
+    assert.equal(search.players[0].name, 'Casey Rivera');
+    assert.equal((await signup.searchPlayers('riv')).players[0].name, 'Casey Rivera');
+    assert.equal((await signup.searchPlayers('casey r')).players[0].name, 'Casey Rivera');
     await signup.signOutOrganizer();
     await signup.signInOrganizer({ email, password });
     await signup.checkOutEntry(firstSession.id, jinaEntry.id);
     dashboard = await signup.getAdminDashboard(date);
-    assert.equal(dashboard.entries.find((entry) => entry.name === 'Casey').status, 'confirmed');
+    assert.equal(dashboard.entries.find((entry) => entry.name === 'Casey Rivera').status, 'confirmed');
     assert.equal(dashboard.session.confirmedCount, 4);
     assert.equal(dashboard.session.checkedInCount, 3);
     assert.equal(dashboard.session.waitlistCount, 0);
+
+    // A prior checked-out entry must not mask this player's new reservation
+    // when the next court draw builds its eligible roster.
+    await signup.updateSession(firstSession.id, { capacity: 5 });
+    await signup.signOutOrganizer();
+    const repeatRequest = await signup.submitSignup({
+      sessionId: firstSession.id, playerId: playerIds.Jina,
+    });
+    await signup.signOutOrganizer();
+    await signup.signInOrganizer({ email, password });
+    await signup.approveEntry(firstSession.id, repeatRequest.entry.id);
+    await signup.checkInEntry(firstSession.id, repeatRequest.entry.id);
+    const openCourt = (await courts.saveCourt({
+      name: `Open Court ${Date.now()}`, allowedSkills: ['beginner', 'intermediate', 'advanced'],
+      division: 'open', format: 'doubles',
+    })).court;
+    const nextDraw = await courts.proposeCourtLineup({ sessionId: firstSession.id, courtId: openCourt.id });
+    assert.ok(nextDraw.lineup);
+    assert.ok([...nextDraw.lineup.sideA, ...nextDraw.lineup.sideB].includes(playerIds.Jina));
+
+    // Simulate an older client that committed a checkout but stopped before
+    // promoting the waitlist; loading/reconciling must repair the open spot.
+    const waitingPlayer = adminDb.collection('players').doc();
+    await waitingPlayer.set({
+      name: 'Mila', nameLower: 'mila', skillLevel: 'advanced',
+      division: 'woman', photoData: null, active: true, wins: 0, losses: 0,
+      createdAt: new Date(), updatedAt: new Date(),
+    });
+    const waiting = await signup.reservePlayer(firstSession.id, waitingPlayer.id);
+    assert.equal(waiting.entry.status, 'waitlisted');
+    const anaEntry = dashboard.entries.find((entry) => entry.name === 'Ana');
+    await adminDb.runTransaction(async (transaction) => {
+      transaction.update(adminDb.doc('sessions/' + firstSession.id + '/entries/' + anaEntry.id), {
+        status: 'checked_out', checkedIn: false, checkedOutAt: new Date(),
+      });
+      transaction.delete(adminDb.doc('sessions/' + firstSession.id + '/playerClaims/' + playerIds.Ana));
+      transaction.update(adminDb.doc('sessions/' + firstSession.id), {
+        confirmedCount: 4, checkedInCount: 3,
+      });
+    });
+    assert.equal((await signup.reconcileWaitlist(firstSession.id)).promotedCount, 1);
+    assert.equal((await signup.reconcileWaitlist(firstSession.id)).promotedCount, 0);
+    assert.equal((await adminDb.doc('sessions/' + firstSession.id + '/entries/' + waiting.entry.id).get()).data().status, 'confirmed');
+
+    const concurrentWaiters = [];
+    for (const name of ['Nora', 'Olive']) {
+      const player = adminDb.collection('players').doc();
+      await player.set({
+        name, nameLower: name.toLowerCase(), skillLevel: 'advanced',
+        division: 'woman', photoData: null, active: true, wins: 0, losses: 0,
+        createdAt: new Date(), updatedAt: new Date(),
+      });
+      concurrentWaiters.push((await signup.reservePlayer(firstSession.id, player.id)).entry.id);
+    }
+    const beforeConcurrentClose = await signup.getAdminDashboard(date);
+    const closingIds = ['Joemari', 'Stef'].map((name) =>
+      beforeConcurrentClose.entries.find((entry) => entry.name === name).id);
+    await Promise.all(closingIds.map((id) => signup.checkOutEntry(firstSession.id, id)));
+    const afterConcurrentClose = await signup.getAdminDashboard(date);
+    assert.equal(afterConcurrentClose.session.confirmedCount, 5);
+    assert.equal(afterConcurrentClose.session.waitlistCount, 0);
+    for (const id of concurrentWaiters) {
+      assert.equal((await adminDb.doc(`sessions/${firstSession.id}/entries/${id}`).get()).data().status, 'confirmed');
+    }
 
     const reset = await signup.resetSession(date);
     assert.notEqual(reset.session.id, firstSession.id);
