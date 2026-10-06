@@ -2,8 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#08468c">
+  <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="description" content="Check in, sit out, see your court, or pair for doubles at Bad Game Pickleball Courts.">
   <title>Player desk · Bad Game Pickleball Courts</title>
   <link rel="icon" href="/logo.jpg" type="image/jpeg">
@@ -11,39 +12,40 @@
   <script type="module" src="/play.js"></script>
 </head>
 <body class="public-page play-page">
-  <header class="site-header">
+  <header class="site-header play-header">
     <div class="shell header-inner">
       <a class="brand" href="/play" aria-label="Bad Game Pickleball Courts player desk">
         <span class="brand-mark"><img src="/logo.jpg" alt=""></span>
-        <span><strong>Bad Game</strong><small>Pickleball Courts</small></span>
+        <span><strong>Bad Game</strong><small>Player desk</small></span>
       </a>
-      <span class="header-chip"><span class="live-dot"></span> Player desk</span>
+      <span class="header-chip"><span class="live-dot"></span> Live</span>
     </div>
   </header>
 
-  <main class="shell public-main">
+  <main class="shell play-main">
     <div id="pageAlert" class="alert" role="alert" hidden></div>
 
-    <section class="intro-panel play-intro">
+    <section class="play-intro">
       <div class="eyebrow">Your attendance</div>
-      <h1>Find your name. Manage your status.</h1>
-      <p class="intro-copy">Search your name, enter your PIN in the popup, then check in, sit out, leave, or pair. Organizers can clear a forgotten PIN.</p>
+      <h1>Find your name</h1>
+      <p class="intro-copy">Search, unlock with your PIN, then check in, sit out, leave, or pair.</p>
     </section>
 
-    <section id="missingLinkPanel" class="signup-card" hidden>
-      <div class="card-heading">
+    <section id="missingLinkPanel" class="play-desk" hidden>
+      <div class="play-empty-state">
         <h2>Player desk not open yet</h2>
-        <p>When the organizer opens today’s session, this page will load the roster automatically. You can also use the player desk link they share.</p>
+        <p>When the organizer opens today’s session, this page loads the roster. You can also use the desk link they share.</p>
+        <a class="button button-outline button-wide" href="/join">Go to signup</a>
       </div>
-      <a class="button button-outline button-wide" href="/join">Go to signup</a>
     </section>
 
-    <section id="deskPanel" class="signup-card" hidden>
-      <div class="session-card play-session" aria-live="polite">
-        <div class="session-card-top">
-          <div><span class="label-overline">Today’s session</span><h2 id="sessionDate">Loading…</h2></div>
-          <span id="sessionState" class="badge badge-neutral">Loading</span>
+    <section id="deskPanel" class="play-desk" hidden>
+      <div class="play-session" aria-live="polite">
+        <div class="play-session-copy">
+          <span class="label-overline">Today’s session</span>
+          <strong id="sessionDate">Loading…</strong>
         </div>
+        <span id="sessionState" class="badge badge-neutral">Loading</span>
       </div>
 
       <div id="myBoard" class="play-board" hidden aria-live="polite">
@@ -58,7 +60,7 @@
         <label class="field-label" for="rosterSearch">Search your name</label>
         <div class="search-field">
           <span aria-hidden="true">⌕</span>
-          <input id="rosterSearch" type="search" placeholder="Type your name" autocomplete="off">
+          <input id="rosterSearch" type="search" placeholder="Type your name" autocomplete="off" enterkeyhint="search">
         </div>
         <div id="rosterResults" class="search-results play-results" aria-live="polite"></div>
       </div>
@@ -97,7 +99,7 @@
           <label id="pairSearchLabel" class="field-label" for="pairSearch" hidden>Request a partner</label>
           <div id="pairSearchField" class="search-field" hidden>
             <span aria-hidden="true">⌕</span>
-            <input id="pairSearch" type="search" placeholder="Search a name to pair" autocomplete="off">
+            <input id="pairSearch" type="search" placeholder="Search a name to pair" autocomplete="off" enterkeyhint="search">
           </div>
           <div id="pairCandidates" class="search-results play-pair-results" hidden></div>
           <div id="pairActions" class="play-actions play-pair-actions"></div>
@@ -129,7 +131,7 @@
     </form>
   </dialog>
 
-  <footer class="site-footer shell">
+  <footer class="site-footer shell play-footer">
     <span>Bad Game Pickleball Courts</span>
     <a id="signupLink" href="/join">Signup link</a>
   </footer>
