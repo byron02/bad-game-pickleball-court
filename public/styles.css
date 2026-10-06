@@ -884,7 +884,6 @@ input[type="datetime-local"].input {
   .play-board strong { font-size: 17px; }
   .play-results { max-height: min(48dvh, 360px); }
   .play-selected { padding: 12px; border-radius: 12px; }
-  .play-actions-inline { grid-template-columns: 1fr; }
   .play-pin-dialog {
     inset: auto 0 0 0;
     width: 100%;
