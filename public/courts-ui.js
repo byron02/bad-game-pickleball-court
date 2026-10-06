@@ -253,8 +253,20 @@ export function initCourtsUI({ getSession, getEntries, showAlert, refreshRoster 
     }));
   }
 
+  function dispose() {
+    sessionId = null;
+    courts = [];
+    games = [];
+    previews.clear();
+    if (grid) grid.replaceChildren(el('p', 'panel-empty', 'Select an open-play event to manage courts.'));
+    if (history) history.replaceChildren(el('p', 'panel-empty', 'No results recorded yet.'));
+  }
+
   async function refresh(nextSessionId = getSession()?.id) {
-    if (!nextSessionId) return;
+    if (!nextSessionId) {
+      dispose();
+      return;
+    }
     if (sessionId !== nextSessionId) {
       sessionId = nextSessionId;
       previews.clear();
@@ -540,5 +552,5 @@ export function initCourtsUI({ getSession, getEntries, showAlert, refreshRoster 
     }
   });
 
-  return { refresh };
+  return { refresh, dispose };
 }
