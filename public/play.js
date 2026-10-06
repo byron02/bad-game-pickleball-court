@@ -158,9 +158,14 @@ function renderBoard() {
   }
   ui.myBoard.hidden = false;
   const assignment = board?.assignment;
+  const partner = mine.partnerPlayerId
+    ? roster.find((entry) => entry.playerId === mine.partnerPlayerId)
+    : null;
   if (mine.sittingOut) {
     ui.boardTitle.textContent = 'Sitting out';
-    ui.boardDetail.textContent = 'You stay reserved, but draws skip you until you resume.';
+    ui.boardDetail.textContent = partner
+      ? `You stay reserved. ${partner.name || 'Your partner'} can still be drawn as a solo until you resume.`
+      : 'You stay reserved, but draws skip you until you resume.';
     return;
   }
   if (!mine.checkedIn) {
@@ -179,8 +184,12 @@ function renderBoard() {
     return;
   }
   ui.boardTitle.textContent = 'Waiting for a court draw';
-  ui.boardDetail.textContent = mine.partnerPlayerId
-    ? `Locked with ${nameForPlayerId(mine.partnerPlayerId)}${mine.partnerGamesRemaining != null ? ` · ${gamesTogetherLabel(mine.partnerGamesRemaining)} left` : ' · unlimited'}. You’ll stay together when a court draws you.`
+  if (partner?.sittingOut) {
+    ui.boardDetail.textContent = `${partner.name || 'Your partner'} is sitting out, so you’ll be drawn as a solo until they resume. Pair stays locked.`;
+    return;
+  }
+  ui.boardDetail.textContent = partner
+    ? `Double Partners with ${partner.name || 'your partner'}${mine.partnerGamesRemaining != null ? ` · ${gamesTogetherLabel(mine.partnerGamesRemaining)} left` : ' · unlimited'}. You’ll stay together when both of you are in the pool.`
     : 'You’re in the pool as a solo until a partner request is approved.';
 }
 
@@ -258,7 +267,7 @@ function renderResults() {
     if (record) bits.push(record);
     if (controlsEntry(entry)) bits.push('Unlocked');
     else if (entry.hasPlayPin) bits.push('PIN protected');
-    if (entry.partnerPlayerId) bits.push(`with ${nameForPlayerId(entry.partnerPlayerId)}`);
+    if (entry.partnerPlayerId) bits.push(`Double Partners · ${nameForPlayerId(entry.partnerPlayerId)}`);
     else if (entry.partnerRequestToPlayerId) bits.push('pair requested');
     meta.textContent = bits.join(' · ');
     info.append(name, meta);
@@ -404,6 +413,9 @@ function selectEntry(entryId, { openPin = true, resetView = openPin } = {}) {
   if (resetView) deskView = 'status';
   setDeskView(deskView);
   renderPairPanel(entry);
+  if (openPin || resetView) {
+    queueMicrotask(() => ui.selected.scrollIntoView({ behavior: 'smooth', block: 'nearest' }));
+  }
 }
 
 async function submitPin(event) {
@@ -449,8 +461,13 @@ function renderPairPanel(entry) {
     const gamesBit = entry.partnerGamesRemaining != null
       ? `${gamesTogetherLabel(entry.partnerGamesRemaining)} left`
       : 'unlimited';
-    const bits = [`Locked with ${nameForPlayerId(entry.partnerPlayerId)}`, gamesBit];
+    const bits = [`Double Partners with ${nameForPlayerId(entry.partnerPlayerId)}`, gamesBit];
     if (partnerRecord) bits.push(partnerRecord);
+    if (entry.sittingOut) {
+      bits.push(`${partner?.name || 'Partner'} can still play solo`);
+    } else if (partner?.sittingOut) {
+      bits.push('they’re sitting out · you play solo for now');
+    }
     ui.pairStatus.textContent = `${bits.join(' · ')}.`;
     setPairSearchVisible(false);
     const unpair = document.createElement('button');
