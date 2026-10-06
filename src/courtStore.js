@@ -473,6 +473,12 @@ export async function startCourtGame({ sessionId, courtId, lineup }) {
       transaction.get(sessionRef(sessionId)), transaction.get(courtRef(courtId)),
     ]);
     if (!session.exists() || session.data().open !== true) throw error('This session is closed.');
+    if (session.data().kind === 'event') {
+      const event = await transaction.get(doc(db, 'events', sessionId));
+      if (!event.exists() || event.data().status !== 'in_progress' || event.data().kind !== 'open_play') {
+        throw error('Start this open-play event first.');
+      }
+    }
     if (!court.exists()) throw error('Court not found.', 'not-found');
     if (court.data().activeGameId) throw error('This court already has an active game.');
 
@@ -597,11 +603,12 @@ export async function replaceCourtPlayer({ sessionId, gameId, outgoingPlayerId, 
 
 /** Award final-lineup W/L counters and free the court in one transaction. */
 export async function completeCourtGame({ sessionId, gameId, winnerSide }) {
-  await ensureOrganizer();
+  const user = await ensureOrganizer();
   const reference = gameRef(sessionId, gameId);
   const result = await runTransaction(db, async (transaction) => {
     const game = await transaction.get(reference);
     if (!game.exists()) throw error('Game not found.', 'not-found');
+    if (game.data().eventMatchId) throw error('Record tournament results from the event desk.');
     const recorded = recordGameResult({
       game: { id: game.id, ...game.data() }, winnerSide,
     });
@@ -640,6 +647,25 @@ export async function completeCourtGame({ sessionId, gameId, winnerSide }) {
       activeGameCount: Math.max(0, (session.data().activeGameCount || 0) - 1),
       updatedAt: serverTimestamp(),
     });
+    if (session.data().kind === 'event') {
+      const eventMatch = {
+        stage: 'open_play', round: 0, slot: 0, sides: [null, null],
+        sideAPlayerIds: [...data.lineup.sideA],
+        sideBPlayerIds: [...data.lineup.sideB],
+        sideA: data.lineup.sideA.map((playerId) => ({ id: playerId, name: data.playerSnapshots?.[playerId]?.name || 'Player' })),
+        sideB: data.lineup.sideB.map((playerId) => ({ id: playerId, name: data.playerSnapshots?.[playerId]?.name || 'Player' })),
+        status: 'completed', winnerSide, winnerId: null, score: null,
+        courtId: data.courtId, courtName: data.courtName, gameId,
+        startedAt: data.startedAt, completedAt: serverTimestamp(),
+        createdAt: data.startedAt, updatedAt: serverTimestamp(),
+      };
+      transaction.set(doc(db, 'events', sessionId, 'matches', gameId), eventMatch);
+      transaction.set(doc(db, 'events', sessionId, 'publicMatches', gameId), eventMatch);
+      transaction.set(doc(collection(db, 'events', sessionId, 'audit')), {
+        action: 'record_open_play_game', gameId, winnerSide,
+        byUid: user.uid, at: serverTimestamp(),
+      });
+    }
     const partnerPatchByPath = new Map();
     const consumed = new Set();
     const entryByPlayer = new Map(entries.map((snap) => [snap.data().playerId, snap]));
@@ -713,6 +739,7 @@ export async function cancelCourtGame({ sessionId, gameId }) {
   const cancelled = await runTransaction(db, async (transaction) => {
     const game = await transaction.get(reference);
     if (!game.exists()) throw error('Game not found.', 'not-found');
+    if (game.data().eventMatchId) throw error('Cancel tournament matches from the event desk.');
     if (game.data().status === 'cancelled') return false;
     if (game.data().status !== 'active') throw error('A completed game cannot be cancelled.');
     const data = game.data();

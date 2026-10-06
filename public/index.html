@@ -27,11 +27,11 @@
       <section class="intro-panel" aria-labelledby="joinTitle">
         <div class="eyebrow">Bad Game · Open play</div>
         <h1 id="joinTitle">Your next game starts here.</h1>
-        <p id="introCopy" class="intro-copy">Pick your name from our player list, or make a new player profile. The organizer will review your request for today's session.</p>
+        <p id="introCopy" class="intro-copy">Pick your name from our player list, or make a new player profile. The organizer will review your request for this session.</p>
 
         <div id="sessionCard" class="session-card" aria-live="polite">
           <div class="session-card-top">
-            <div><span class="label-overline">Today's session</span><h2 id="sessionDate">Loading…</h2></div>
+            <div><span class="label-overline">Open play session</span><h2 id="sessionDate">Loading…</h2></div>
             <span id="sessionState" class="badge badge-neutral">Loading</span>
           </div>
           <div class="capacity-line"><strong id="confirmedCount">—</strong><span> / <span id="capacityCount">—</span> confirmed spots</span></div>
@@ -59,25 +59,26 @@
       </section>
 
       <section class="signup-card" aria-labelledby="signupTitle">
-        <div class="card-heading"><span class="eyebrow">Player signup</span><h2 id="signupTitle">I want to play today</h2><p id="signupIntro">Choose how you'd like to join the list.</p></div>
+        <div class="card-heading"><span class="eyebrow">Player signup</span><h2 id="signupTitle">I want to play</h2><p id="signupIntro">Choose how you'd like to join the list.</p></div>
 
         <div id="missingLinkPanel" class="missing-link-panel" hidden>
-          <p>Ask the organizer for today's signup link in your group chat. Each session has its own link.</p>
+          <p>Ask the organizer for the current signup link in your group chat. Each session has its own link.</p>
           <a class="button button-outline button-wide" href="/admin/">I'm the organizer</a>
         </div>
 
         <div id="joinBody">
           <div class="tabs" role="tablist" aria-label="Player type">
-            <button id="existingTab" class="tab active" type="button" role="tab" aria-selected="true" aria-controls="existingPanel">I've played here</button>
-            <button id="newTab" class="tab" type="button" role="tab" aria-selected="false" aria-controls="newPanel">I'm new</button>
+            <button id="existingTab" class="tab active" type="button" role="tab" aria-selected="true" aria-controls="existingPanel" tabindex="0">I've played here</button>
+            <button id="newTab" class="tab" type="button" role="tab" aria-selected="false" aria-controls="newPanel" tabindex="-1">I'm new</button>
           </div>
 
           <section id="existingPanel" class="tab-panel" role="tabpanel" aria-labelledby="existingTab">
             <label class="field-label" for="playerSearch">Find your player profile</label>
-            <div class="search-field"><span aria-hidden="true">⌕</span><input id="playerSearch" type="search" autocomplete="off" placeholder="Type at least 2 letters" maxlength="60"></div>
+            <div class="search-field"><span aria-hidden="true">⌕</span><input id="playerSearch" type="search" autocomplete="off" placeholder="First or last name, at least 2 letters" maxlength="60"></div>
             <p class="field-help">Select your profile below. Every signup is reviewed by the organizer.</p>
-            <div id="searchResults" class="search-results" aria-live="polite"><p class="empty-note">Start typing your name to search.</p></div>
-            <div id="selectedPlayer" class="selected-player" hidden></div>
+            <div id="searchResults" class="search-results"><p class="empty-note">Start typing your name to search.</p></div>
+            <p id="searchStatus" class="field-help search-status" role="status" aria-live="polite"></p>
+            <div id="selectedPlayer" class="selected-player" role="status" aria-live="polite" hidden></div>
             <label class="field-label" for="existingPhoto">Add or update your photo <span class="optional">optional</span></label>
             <div class="photo-picker">
               <div id="existingPhotoPreview" class="photo-preview" aria-hidden="true">+</div>
@@ -122,7 +123,7 @@
 
         <div id="successPanel" class="success-panel" role="status" hidden>
           <div class="success-icon" aria-hidden="true">✓</div>
-          <h3 id="successTitle">Request sent!</h3>
+          <h3 id="successTitle" tabindex="-1">Request sent!</h3>
           <p>Your signup is awaiting organizer review. Once approved, you'll have a confirmed spot or a place on the waitlist.</p>
           <p class="field-help">This page updates when the organizer reviews your request.</p>
         </div>

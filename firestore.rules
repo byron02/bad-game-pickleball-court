@@ -464,5 +464,84 @@ service cloud.firestore {
       allow read: if organizer() || anonymousPlayer();
       allow write: if organizer();
     }
+
+    function eventSignupOpen(eventId) {
+      let event = get(/databases/$(database)/documents/publicEvents/$(eventId));
+      return event.data.registrationOpen == true &&
+        event.data.closesAt is timestamp && request.time < event.data.closesAt;
+    }
+
+    function validEventPlayer(player) {
+      return player is map &&
+        player.keys().hasOnly(['playerId', 'name', 'skillLevel', 'division', 'photoData']) &&
+        player.keys().hasAll(['playerId', 'name', 'skillLevel', 'division', 'photoData']) &&
+        validName(player.name) && validSkill(player.skillLevel) &&
+        validDivision(player.division) && validPhoto(player.photoData) &&
+        (player.playerId == null ||
+          (player.playerId is string &&
+            exists(/databases/$(database)/documents/playerDirectory/$(player.playerId)) &&
+            get(/databases/$(database)/documents/playerDirectory/$(player.playerId)).data.active == true &&
+            get(/databases/$(database)/documents/playerDirectory/$(player.playerId)).data.name == player.name));
+    }
+
+    function validEventRequest(eventId, registrationId) {
+      let data = request.resource.data;
+      return anonymousPlayer() && registrationId == request.auth.uid &&
+        eventSignupOpen(eventId) &&
+        data.keys().hasOnly(['ownerUid', 'eventId', 'players', 'teamName', 'status',
+          'checkedIn', 'source', 'playerIds', 'entryIds', 'createdAt', 'updatedAt', 'reviewedAt']) &&
+        data.keys().hasAll(['ownerUid', 'eventId', 'players', 'teamName', 'status',
+          'checkedIn', 'source', 'playerIds', 'entryIds', 'createdAt', 'updatedAt', 'reviewedAt']) &&
+        data.ownerUid == request.auth.uid && data.eventId == eventId &&
+        data.status == 'pending' && data.checkedIn == false && data.source == 'public' &&
+        data.playerIds == [] && data.entryIds == [] && data.reviewedAt == null &&
+        data.teamName is string && data.teamName.size() <= 60 &&
+        data.players is list && data.players.size() >= 1 && data.players.size() <= 2 &&
+        validEventPlayer(data.players[0]) &&
+        (data.players.size() == 1 || validEventPlayer(data.players[1])) &&
+        (data.players.size() == 1 || data.players[0].playerId == null ||
+          data.players[1].playerId == null ||
+          data.players[0].playerId != data.players[1].playerId) &&
+        data.createdAt == request.time && data.updatedAt == request.time;
+    }
+
+    match /publicEvents/{eventId} {
+      allow get: if organizer() || anonymousPlayer();
+      allow list: if organizer();
+      allow create, update, delete: if organizer();
+    }
+
+    match /events/{eventId} {
+      allow read, write: if organizer();
+
+      match /registrations/{registrationId} {
+        allow get: if organizer() || (anonymousPlayer() && registrationId == request.auth.uid);
+        allow list: if organizer();
+        allow create: if organizer() || validEventRequest(eventId, registrationId);
+        allow update: if organizer();
+        allow delete: if false;
+      }
+      match /publicRegistrations/{registrationId} {
+        allow read: if organizer() || anonymousPlayer();
+        allow write: if organizer();
+      }
+      match /matches/{matchId} {
+        allow read, write: if organizer();
+      }
+      match /publicMatches/{matchId} {
+        allow read: if organizer() || anonymousPlayer();
+        allow write: if organizer();
+      }
+      match /teams/{teamId} {
+        allow read, write: if organizer();
+      }
+      match /teamClaims/{playerId} {
+        allow read, write: if organizer();
+      }
+      match /audit/{auditId} {
+        allow read, create: if organizer();
+        allow update, delete: if false;
+      }
+    }
   }
 }

@@ -6,10 +6,12 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "dev": "npm run build && firebase emulators:start --only hosting,auth,firestore",
-    "test": "node --test",
-    "deploy": "npm run build && firebase deploy --only hosting,firestore",
-    "deploy:hosting": "npm run build && firebase deploy --only hosting",
-    "deploy:rules": "node scripts/deploy-firestore-rules.mjs",
+    "test": "npm run test:unit && npm run test:emulators",
+    "test:unit": "node --test tests/courts.test.js tests/session.test.js tests/tournaments.test.js",
+    "test:emulators": "firebase emulators:exec --only auth,firestore --project bad-game-pickleball \"node --test tests/app-integration.test.js tests/firebase-rules.test.js tests/migration.test.js tests/event-integration.test.js\"",
+    "deploy": "npm test && npm run build && firebase deploy --only hosting,firestore",
+    "deploy:hosting": "npm test && npm run build && firebase deploy --only hosting",
+    "deploy:rules": "npm test && node scripts/deploy-firestore-rules.mjs",
     "bootstrap:organizer": "node scripts/bootstrap-organizer.mjs"
   },
   "dependencies": {

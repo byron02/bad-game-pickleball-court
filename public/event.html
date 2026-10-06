@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#08468c">
+  <meta name="description" content="Sign up for a Bad Game Pickleball event and follow its results.">
+  <title>Game event · Bad Game Pickleball Courts</title>
+  <link rel="icon" href="/logo.jpg" type="image/jpeg">
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/event.js"></script>
+</head>
+<body class="event-page public-page">
+  <header class="site-header">
+    <div class="shell header-inner">
+      <a class="brand" href="/join" aria-label="Bad Game Pickleball Courts home">
+        <span class="brand-mark"><img src="/logo.jpg" alt=""></span>
+        <span><strong>Bad Game</strong><small>Pickleball Courts</small></span>
+      </a>
+      <span class="header-chip"><span class="live-dot"></span> Game events</span>
+    </div>
+  </header>
+
+  <main class="shell event-main">
+    <div id="eventAlert" class="alert" role="alert" hidden></div>
+    <div class="event-top-grid">
+      <section class="event-intro" aria-labelledby="eventTitle">
+        <span id="eventKind" class="eyebrow">Bad Game · Event</span>
+        <h1 id="eventTitle">Loading event…</h1>
+        <p id="eventDescription" class="event-description">Checking the event details and available spots.</p>
+        <div id="eventFacts" class="event-facts" aria-label="Event details"></div>
+
+        <div id="eventCapacityCard" class="event-capacity-card" hidden>
+          <div class="event-capacity-head">
+            <div><span class="label-overline">Reservations</span><strong><span id="eventApprovedCount">0</span> / <span id="eventCapacity">0</span></strong></div>
+            <span id="eventState" class="badge badge-neutral">Loading</span>
+          </div>
+          <div class="capacity-track" aria-hidden="true"><span id="eventCapacityFill"></span></div>
+          <p id="eventCapacityNote" class="field-help"></p>
+        </div>
+      </section>
+
+      <section class="signup-card event-signup-card" aria-labelledby="eventSignupTitle">
+        <div class="card-heading"><span class="eyebrow">Player signup</span><h2 id="eventSignupTitle">Join this event</h2><p id="eventSignupIntro">The organizer reviews each request before it holds a spot.</p></div>
+        <div id="eventMissingLink" class="missing-link-panel" hidden>
+          <p>Ask the organizer to share this event’s signup link.</p>
+          <a class="button button-outline button-wide" href="/admin/">I'm the organizer</a>
+        </div>
+        <div id="eventSignupClosed" class="event-closed-note" hidden>Signups are closed for this event. You can still see its roster and results below.</div>
+        <form id="eventSignupForm" novalidate hidden>
+          <div id="eventSignupMode" hidden>
+            <span class="field-label">Join this doubles event</span>
+            <div class="event-choice-switch" role="group" aria-label="Signup size">
+              <button id="eventJoinIndividual" class="event-choice active" type="button" aria-pressed="true">Just me</button>
+              <button id="eventJoinTeam" class="event-choice" type="button" aria-pressed="false">With a partner</button>
+            </div>
+            <p id="eventTeamHelp" class="field-help" hidden>Both partners are approved and waitlisted together. Your team needs two open spots to be confirmed.</p>
+          </div>
+          <label class="field-label" for="eventTeamName" id="eventTeamNameLabel" hidden>Team name <span class="optional">optional</span></label>
+          <input id="eventTeamName" class="input" name="teamName" type="text" maxlength="60" placeholder="e.g. The Rally Crew" hidden>
+          <div id="eventParticipantForms" class="event-participant-forms"></div>
+          <button id="eventSubmit" class="button button-primary button-wide" type="submit">Send request <span aria-hidden="true">→</span></button>
+          <p class="submission-note">A request holds no spot until the organizer approves it. Full events accept waitlist requests.</p>
+        </form>
+        <div id="eventSignupStatus" class="success-panel" role="status" aria-live="polite" hidden>
+          <div class="success-icon" aria-hidden="true">✓</div>
+          <h3 id="eventStatusTitle" tabindex="-1">Request sent!</h3>
+          <p id="eventStatusCopy">Your request is awaiting organizer review.</p>
+          <p class="field-help">This page updates when the organizer reviews your request.</p>
+        </div>
+      </section>
+    </div>
+
+    <section id="eventPublicRecords" class="event-records" aria-label="Event records" hidden>
+      <div class="event-records-head"><div><span class="eyebrow">Event records</span><h2>Players and results</h2></div><button id="eventRefresh" class="button button-outline button-small" type="button">Refresh results</button></div>
+      <div class="event-record-tabs" role="tablist" aria-label="Event records">
+        <button class="event-record-tab active" type="button" data-view="roster" role="tab" aria-selected="true" aria-controls="eventRosterPanel">Roster <span id="eventRosterTabCount"></span></button>
+        <button class="event-record-tab" type="button" data-view="standings" role="tab" aria-selected="false" aria-controls="eventStandingsPanel">Standings</button>
+        <button class="event-record-tab" type="button" data-view="matches" role="tab" aria-selected="false" aria-controls="eventMatchesPanel">Matches</button>
+      </div>
+      <div id="eventRosterPanel" class="event-record-panel" role="tabpanel"><div id="eventRoster" class="event-roster-list"></div></div>
+      <div id="eventStandingsPanel" class="event-record-panel" role="tabpanel" hidden><div id="eventStandings"></div></div>
+      <div id="eventMatchesPanel" class="event-record-panel" role="tabpanel" hidden><div id="eventMatches" class="event-match-list"></div></div>
+    </section>
+  </main>
+  <footer class="site-footer shell"><span>Bad Game Pickleball Courts</span><a href="/admin">Organizer dashboard</a></footer>
+</body>
+</html>

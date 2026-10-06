@@ -24,6 +24,7 @@ import {
   runTransaction,
   serverTimestamp,
   setDoc,
+  Timestamp,
   updateDoc,
   startAt,
   endAt,
@@ -87,6 +88,23 @@ function validDate(value) {
     throw error('Choose a valid date.');
   }
   return value;
+}
+
+export function sessionClosesAt(date) {
+  validDate(date);
+  // Manila is UTC+08:00 without daylight saving time. 16:00 UTC on the
+  // selected date is midnight at the start of the following Manila day.
+  return new Date(`${date}T16:00:00.000Z`);
+}
+
+function searchPrefixes(name) {
+  const lower = name.toLocaleLowerCase().trim().replace(/\s+/g, ' ');
+  const surname = lower.split(' ').at(-1);
+  const prefixes = new Set();
+  for (const value of [lower, surname]) {
+    for (let size = 2; size <= value.length; size += 1) prefixes.add(value.slice(0, size));
+  }
+  return [...prefixes];
 }
 
 function validName(value) {
@@ -158,6 +176,7 @@ function normalizedSession(snapshot) {
     waitlistCount: value.waitlistCount || 0,
     spotsLeft: Math.max(0, capacity - confirmedCount),
     open: value.open === true,
+    closesAt: timestamp(value.closesAt),
     createdAt: timestamp(value.createdAt),
     archivedAt: timestamp(value.archivedAt),
   };
@@ -248,7 +267,7 @@ export function watchAuth(callback) {
   }
 }
 
-async function ensurePublicAuth() {
+export async function ensurePublicAuth() {
   const current = await authReady();
   if (current?.isAnonymous) return current;
   // Admin Google/password sessions share this Firebase app. Player desk and
@@ -459,7 +478,7 @@ export async function signOutOrganizer() { initializeClient(); await signOut(aut
 
 function newSession(date, cycle, capacity = 32) {
   return {
-    date, cycle, capacity, confirmedCount: 0, checkedInCount: 0,
+    date, cycle, capacity, closesAt: Timestamp.fromDate(sessionClosesAt(date)), confirmedCount: 0, checkedInCount: 0,
     waitlistCount: 0, activeGameCount: 0, open: true, createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(), archivedAt: null,
   };
@@ -515,14 +534,21 @@ export async function getPublicPlaySession(sessionId = null) {
 
 function directoryPayload(player, overrides = {}) {
   const name = overrides.name || player.name;
+  const nameLower = overrides.nameLower || player.nameLower || String(name || '').toLocaleLowerCase();
   return {
     name,
-    nameLower: overrides.nameLower || player.nameLower || String(name || '').toLocaleLowerCase(),
+    nameLower,
+    searchPrefixes: Object.prototype.hasOwnProperty.call(overrides, 'searchPrefixes')
+      ? overrides.searchPrefixes
+      : (player.searchPrefixes || searchPrefixes(name)),
     skillLevel: overrides.skillLevel || player.skillLevel,
     division: overrides.division || player.division || 'unspecified',
     photoData: Object.prototype.hasOwnProperty.call(overrides, 'photoData')
       ? overrides.photoData
       : (player.photoData || null),
+    active: Object.prototype.hasOwnProperty.call(overrides, 'active')
+      ? overrides.active !== false
+      : (player.active !== false),
     wins: Number(Object.prototype.hasOwnProperty.call(overrides, 'wins') ? overrides.wins : (player.wins || 0)),
     losses: Number(Object.prototype.hasOwnProperty.call(overrides, 'losses') ? overrides.losses : (player.losses || 0)),
   };
@@ -538,6 +564,18 @@ export async function searchPlayers(text) {
     startAt(needle), endAt(`${needle}\uf8ff`), limit(20),
   ));
   return { players: results.docs.map(normalizedPlayer) };
+}
+
+/** Organizer search across the full player database for event desks. */
+export async function searchAdminPlayers(text = '') {
+  await ensureOrganizer();
+  const needle = String(text || '').trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+  if (needle && needle.length < 2) return { players: [], hasMore: false };
+  const players = (await listPlayers())
+    .filter((player) => !needle || searchPrefixes(player.name).includes(needle)
+      || String(player.nameLower || '').includes(needle))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return { players: players.slice(0, 40), hasMore: players.length > 40 };
 }
 
 /** Public lifetime leaderboard from the approved directory. */
@@ -759,7 +797,7 @@ export async function approveEntry(sessionId, entryId, options = {}) {
     const status = confirmed ? 'confirmed' : 'waitlisted';
     if (!existingPlayer) {
       const profile = {
-        name, nameLower: name.toLocaleLowerCase(), skillLevel,
+        name, nameLower: name.toLocaleLowerCase(), searchPrefixes: searchPrefixes(name), skillLevel,
         division: validDivision(request.division),
         photoData: validPhoto(request.photoData), active: true, wins: 0, losses: 0,
         createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
@@ -771,13 +809,14 @@ export async function approveEntry(sessionId, entryId, options = {}) {
       const playerPatch = {
         name,
         nameLower: name.toLocaleLowerCase(),
+        searchPrefixes: searchPrefixes(name),
         skillLevel,
         updatedAt: serverTimestamp(),
       };
       if (request.photoData) playerPatch.photoData = photoData;
       transaction.update(existingPlayer, playerPatch);
       transaction.set(directoryRef(freshPlayer.id), directoryPayload(player.data(), {
-        name, nameLower: name.toLocaleLowerCase(), skillLevel, photoData,
+        name, nameLower: name.toLocaleLowerCase(), searchPrefixes: searchPrefixes(name), skillLevel, photoData,
       }), { merge: true });
     }
     transaction.set(claim, { entryId, createdAt: serverTimestamp() });
@@ -1569,6 +1608,7 @@ export async function createAndReservePlayer(sessionId, {
     const profile = {
       name: playerName,
       nameLower: playerName.toLocaleLowerCase(),
+      searchPrefixes: searchPrefixes(playerName),
       skillLevel: skill,
       division: gender,
       photoData: null,
@@ -1635,6 +1675,7 @@ export async function updatePlayer(playerId, changes, sessionId = null) {
     const name = validName(changes.name);
     patch.name = name;
     patch.nameLower = name.toLocaleLowerCase();
+    patch.searchPrefixes = searchPrefixes(name);
   }
   if (Object.prototype.hasOwnProperty.call(changes, 'skillLevel')) {
     patch.skillLevel = validSkill(changes.skillLevel);
