@@ -39,23 +39,50 @@ export function initCourtsUI({ getSession, getEntries, showAlert, refreshRoster 
     return snapshot?.name || getEntries().find((entry) => entry.playerId === id)?.name || 'Player';
   }
 
-  function playerLabel(id, game, previewPlayers = []) {
+  function entryFor(id) {
+    return getEntries().find((item) => item.playerId === id) || null;
+  }
+
+  function areLockedPartners(aId, bId) {
+    const a = entryFor(aId);
+    const b = entryFor(bId);
+    return Boolean(a?.partnerPlayerId && b?.partnerPlayerId
+      && a.partnerPlayerId === bId && b.partnerPlayerId === aId);
+  }
+
+  function playerLabel(id, game, previewPlayers = [], { mentionPartner = true } = {}) {
     const fromPreview = previewPlayers.find((player) => player.id === id);
     const name = fromPreview?.name || nameFor(id, game);
     const gamesPlayed = Number(fromPreview?.gamesPlayed || 0);
-    const entry = getEntries().find((item) => item.playerId === id);
-    const partner = entry?.partnerPlayerId
-      ? getEntries().find((item) => item.playerId === entry.partnerPlayerId)?.name
+    const entry = entryFor(id);
+    const partner = mentionPartner && entry?.partnerPlayerId
+      ? entryFor(entry.partnerPlayerId)?.name
       : null;
     if (!fromPreview) return partner ? `${name} (with ${partner})` : name;
     const games = `${gamesPlayed} ${gamesPlayed === 1 ? 'game' : 'games'}`;
     return partner ? `${name} · ${games} · with ${partner}` : `${name} · ${games}`;
   }
 
+  function sideLabel(ids, game, previewPlayers = []) {
+    const teamIds = Array.isArray(ids) ? ids.filter(Boolean) : [];
+    if (teamIds.length === 2 && areLockedPartners(teamIds[0], teamIds[1])) {
+      const names = teamIds.map((id) => {
+        const fromPreview = previewPlayers.find((player) => player.id === id);
+        return fromPreview?.name || nameFor(id, game);
+      });
+      return `${names[0]} + ${names[1]} (Double Partners)`;
+    }
+    return teamIds.map((id) => {
+      const entry = entryFor(id);
+      const partnerOnSide = entry?.partnerPlayerId && teamIds.includes(entry.partnerPlayerId);
+      return playerLabel(id, game, previewPlayers, { mentionPartner: !partnerOnSide });
+    }).join(' + ');
+  }
+
   function teamRow(side, ids, game, previewPlayers = []) {
     const row = el('div', 'court-side');
     row.append(el('strong', '', `Side ${side}`));
-    row.append(el('span', '', ids.map((id) => playerLabel(id, game, previewPlayers)).join(' + ')));
+    row.append(el('span', '', sideLabel(ids, game, previewPlayers)));
     return row;
   }
 
@@ -351,7 +378,7 @@ export function initCourtsUI({ getSession, getEntries, showAlert, refreshRoster 
       const bits = [entry.name || 'Player', entry.skillLevel || ''];
       if (entry.partnerPlayerId) {
         const partner = getEntries().find((item) => item.playerId === entry.partnerPlayerId);
-        if (partner?.name) bits.push(`with ${partner.name}`);
+        if (partner?.name) bits.push(`Double Partners · ${partner.name}`);
       }
       const option = el('option', '', bits.filter(Boolean).join(' · '));
       option.value = entry.playerId;

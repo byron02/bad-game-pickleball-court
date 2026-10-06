@@ -376,6 +376,24 @@ input[type="datetime-local"].input {
 .count-pill { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; height: 24px; padding: 2px 7px; border-radius: 999px; color: var(--blue); background: var(--blue-pale); font-size: 11px; vertical-align: 2px; }
 .entry-list { display: grid; gap: 9px; }
 .entry-row { display: flex; gap: 11px; align-items: flex-start; min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface-tint); }
+.entry-pair-avatars {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+.entry-pair-avatars .avatar { margin-right: -10px; box-shadow: 0 0 0 2px var(--surface-tint); }
+.entry-pair-avatars .avatar:last-child { margin-right: 0; }
+.entry-pair-person {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.entry-pair-person-name { font-size: 12px; font-weight: 800; color: var(--navy); }
+.entry-pair-person .badge { margin-right: 6px; }
+.entry-pair-person .entry-actions { margin-top: 0; }
+.entry-pair-actions { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
 .entry-body { flex: 1; min-width: 0; }
 .entry-top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .entry-body strong { font-size: 13px; }

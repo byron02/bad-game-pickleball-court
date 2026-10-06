@@ -374,6 +374,88 @@ function partnerName(entry) {
   return entries.find((item) => item.playerId === entry.partnerPlayerId)?.name || 'Partner';
 }
 
+function partnerEntry(entry) {
+  if (!entry?.partnerPlayerId) return null;
+  const partner = entries.find((item) => item.playerId === entry.partnerPlayerId);
+  if (!partner || partner.partnerPlayerId !== entry.playerId) return null;
+  return partner;
+}
+
+function sortPair(a, b) {
+  return [a, b].sort((left, right) =>
+    String(left.name || '').localeCompare(String(right.name || ''), undefined, { sensitivity: 'base' }));
+}
+
+function appendConfirmedStatusBadges(top, entry) {
+  if (entry.sittingOut) top.append(statusBadge('Sitting out', 'amber'));
+  else top.append(statusBadge(entry.checkedIn ? 'Checked in' : 'Reserved', entry.checkedIn ? 'green' : 'blue'));
+  if (entry.hasPlayPin) top.append(statusBadge('PIN set', 'blue'));
+}
+
+function appendConfirmedActions(actions, entry, { includePairControls = true } = {}) {
+  if (!entry.checkedIn) {
+    actions.append(actionButton('Check in', 'check-in', entry.id, 'button-primary'));
+  } else if (entry.sittingOut) {
+    actions.append(actionButton('Resume', 'resume', entry.id, 'button-primary'));
+  } else {
+    actions.append(actionButton('Sit out', 'sit-out', entry.id, 'button-outline'));
+    actions.append(actionButton('Leave today', 'check-out', entry.id, 'button-outline'));
+  }
+  if (entry.hasPlayPin) {
+    actions.append(actionButton('Clear PIN', 'clear-pin', entry.id, 'button-quiet'));
+  }
+  if (entry.playerId) {
+    if (includePairControls) {
+      actions.append(actionButton(entry.partnerPlayerId ? 'Change pair' : 'Pair doubles', 'pair', entry.id, 'button-outline'));
+      if (entry.partnerPlayerId) actions.append(actionButton('Unpair', 'unpair', entry.id, 'button-quiet'));
+    }
+    actions.append(actionButton('Edit', 'edit-entry-player', entry.playerId, 'button-quiet'));
+  }
+  actions.append(actionButton('Remove', 'remove', entry.id, 'button-quiet'));
+}
+
+function renderPartnerPair(first, second) {
+  const [a, b] = sortPair(first, second);
+  const row = node('article', 'entry-row entry-pair');
+  const marks = node('div', 'entry-pair-avatars');
+  marks.append(avatar(a));
+  marks.append(avatar(b));
+  row.append(marks);
+  const body = node('div', 'entry-body');
+  const top = node('div', 'entry-top');
+  top.append(node('strong', '', `${a.name || 'Player'} + ${b.name || 'Player'}`));
+  top.append(statusBadge('Double Partners', 'amber'));
+  body.append(top);
+  const details = [
+    [a.skillLevel, b.skillLevel].filter(Boolean).join(' / ') || 'Skill not set',
+  ];
+  const signedA = formatSignupAt(a.createdAt);
+  const signedB = formatSignupAt(b.createdAt);
+  if (signedA && signedB && signedA === signedB) details.push(signedA);
+  else {
+    if (signedA) details.push(`${a.name}: ${signedA}`);
+    if (signedB) details.push(`${b.name}: ${signedB}`);
+  }
+  body.append(node('div', 'entry-meta', details.join(' · ')));
+
+  for (const person of [a, b]) {
+    const personBlock = node('div', 'entry-pair-person');
+    personBlock.append(node('span', 'entry-pair-person-name', person.name || 'Player'));
+    appendConfirmedStatusBadges(personBlock, person);
+    const actions = node('div', 'entry-actions');
+    appendConfirmedActions(actions, person, { includePairControls: false });
+    personBlock.append(actions);
+    body.append(personBlock);
+  }
+
+  const pairActions = node('div', 'entry-actions entry-pair-actions');
+  pairActions.append(actionButton('Change pair', 'pair', a.id, 'button-outline'));
+  pairActions.append(actionButton('Unpair', 'unpair', a.id, 'button-quiet'));
+  body.append(pairActions);
+  row.append(body);
+  return row;
+}
+
 function renderEntry(entry, kind) {
   const row = node('article', 'entry-row');
   row.append(avatar(entry));
@@ -382,14 +464,10 @@ function renderEntry(entry, kind) {
   top.append(node('strong', '', entry.name || 'Unnamed player'));
   if (kind === 'pending') top.append(statusBadge(entry.playerId ? 'Existing player claim' : 'New profile', entry.playerId ? 'blue' : 'amber'));
   if (kind === 'confirmed') {
-    if (entry.sittingOut) top.append(statusBadge('Sitting out', 'amber'));
-    else top.append(statusBadge(entry.checkedIn ? 'Checked in' : 'Reserved', entry.checkedIn ? 'green' : 'blue'));
-    if (entry.hasPlayPin) top.append(statusBadge('PIN set', 'blue'));
+    appendConfirmedStatusBadges(top, entry);
+    if (entry.partnerPlayerId) top.append(statusBadge('Double Partners', 'amber'));
   }
   if (kind === 'waitlist') top.append(statusBadge('Waitlist', 'amber'));
-  if (kind === 'confirmed' && entry.partnerPlayerId) {
-    top.append(statusBadge(`With ${partnerName(entry)}`, 'amber'));
-  }
   body.append(top);
   if (kind === 'pending') {
     body.append(nameInput(entry.id, entry.name));
@@ -405,7 +483,9 @@ function renderEntry(entry, kind) {
     if (entry.division && entry.division !== 'unspecified') details.push(entry.division);
     const signedUp = formatSignupAt(entry.createdAt);
     if (signedUp) details.push(signedUp);
-    if (kind === 'confirmed' && entry.partnerPlayerId) details.push(`Locked doubles with ${partnerName(entry)}`);
+    if (kind === 'confirmed' && entry.partnerPlayerId) {
+      details.push(`with ${partnerName(entry)}`);
+    }
     body.append(node('div', 'entry-meta', details.join(' · ')));
   }
   const actions = node('div', 'entry-actions');
@@ -413,23 +493,7 @@ function renderEntry(entry, kind) {
     actions.append(actionButton('Approve', 'approve', entry.id, 'button-primary'));
     actions.append(actionButton('Reject', 'reject', entry.id, 'button-outline'));
   } else if (kind === 'confirmed') {
-    if (!entry.checkedIn) {
-      actions.append(actionButton('Check in', 'check-in', entry.id, 'button-primary'));
-    } else if (entry.sittingOut) {
-      actions.append(actionButton('Resume', 'resume', entry.id, 'button-primary'));
-    } else {
-      actions.append(actionButton('Sit out', 'sit-out', entry.id, 'button-outline'));
-      actions.append(actionButton('Leave today', 'check-out', entry.id, 'button-outline'));
-    }
-    if (entry.hasPlayPin) {
-      actions.append(actionButton('Clear PIN', 'clear-pin', entry.id, 'button-quiet'));
-    }
-    if (entry.playerId) {
-      actions.append(actionButton(entry.partnerPlayerId ? 'Change pair' : 'Pair doubles', 'pair', entry.id, 'button-outline'));
-      if (entry.partnerPlayerId) actions.append(actionButton('Unpair', 'unpair', entry.id, 'button-quiet'));
-      actions.append(actionButton('Edit', 'edit-entry-player', entry.playerId, 'button-quiet'));
-    }
-    actions.append(actionButton('Remove', 'remove', entry.id, 'button-quiet'));
+    appendConfirmedActions(actions, entry);
   } else if (kind === 'waitlist') {
     actions.append(actionButton('Remove', 'remove', entry.id, 'button-quiet'));
   }
@@ -494,7 +558,19 @@ function renderList(container, items, kind, emptyMessage, options = {}) {
     container.append(node('p', 'panel-empty', emptyMessage));
     return;
   }
-  for (const entry of pageable.items) container.append(renderEntry(entry, kind));
+  const skipped = new Set();
+  for (const entry of pageable.items) {
+    if (skipped.has(entry.id)) continue;
+    if (kind === 'confirmed') {
+      const partner = partnerEntry(entry);
+      if (partner && pageable.items.some((item) => item.id === partner.id)) {
+        skipped.add(partner.id);
+        container.append(renderPartnerPair(entry, partner));
+        continue;
+      }
+    }
+    container.append(renderEntry(entry, kind));
+  }
   if (pageKey) renderPager(pager, pageKey, pageable);
   if (focusedNameId) {
     container.querySelector(`input[data-name-for="${CSS.escape(focusedNameId)}"]`)?.focus();

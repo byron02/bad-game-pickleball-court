@@ -258,7 +258,7 @@ function renderResults() {
     if (record) bits.push(record);
     if (controlsEntry(entry)) bits.push('Unlocked');
     else if (entry.hasPlayPin) bits.push('PIN protected');
-    if (entry.partnerPlayerId) bits.push(`with ${nameForPlayerId(entry.partnerPlayerId)}`);
+    if (entry.partnerPlayerId) bits.push(`Double Partners · ${nameForPlayerId(entry.partnerPlayerId)}`);
     else if (entry.partnerRequestToPlayerId) bits.push('pair requested');
     meta.textContent = bits.join(' · ');
     info.append(name, meta);
