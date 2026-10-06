@@ -180,6 +180,21 @@ test('locked doubles partners stay on the same side', () => {
   assert.ok(withMe.includes('me') && withMe.includes('stef'));
 });
 
+test('when one locked partner sits out, the other can still be drawn solo', () => {
+  const players = [
+    player('nathan', 'intermediate', 'man', { partnerId: 'rivamonte', waitMinutes: 50, sittingOut: true }),
+    player('rivamonte', 'intermediate', 'woman', { partnerId: 'nathan', waitMinutes: 50 }),
+    player('a', 'intermediate', 'man', { waitMinutes: 10 }),
+    player('b', 'intermediate', 'woman', { waitMinutes: 10 }),
+    player('c', 'intermediate', 'man', { waitMinutes: 10 }),
+  ];
+  const lineup = proposeLineup({ court: court('court-1', ['intermediate']), players, random: () => 0.5 });
+  assert.ok(lineup);
+  const ids = IDs(lineup);
+  assert.ok(ids.includes('rivamonte'));
+  assert.ok(!ids.includes('nathan'));
+});
+
 test('waiting longer and playing fewer games affect the proposed four', () => {
   const players = [
     player('waited', 'intermediate', 'man', { waitMinutes: 50, gamesPlayed: 3 }),

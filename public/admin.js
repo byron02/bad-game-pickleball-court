@@ -425,10 +425,17 @@ function renderPartnerPair(first, second) {
   const top = node('div', 'entry-top');
   top.append(node('strong', '', `${a.name || 'Player'} + ${b.name || 'Player'}`));
   top.append(statusBadge('Double Partners', 'amber'));
+  const oneSitting = Boolean(a.sittingOut) !== Boolean(b.sittingOut);
+  if (oneSitting) top.append(statusBadge('One sitting out · other plays solo', 'blue'));
   body.append(top);
   const details = [
     [a.skillLevel, b.skillLevel].filter(Boolean).join(' / ') || 'Skill not set',
   ];
+  if (oneSitting) {
+    const resting = a.sittingOut ? a : b;
+    const active = a.sittingOut ? b : a;
+    details.push(`${resting.name} resting · ${active.name} drawn solo`);
+  }
   const signedA = formatSignupAt(a.createdAt);
   const signedB = formatSignupAt(b.createdAt);
   if (signedA && signedB && signedA === signedB) details.push(signedA);
