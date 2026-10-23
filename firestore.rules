@@ -260,5 +260,117 @@ service cloud.firestore {
         allow update, delete: if false;
       }
     }
+
+    function courtsideEmail() {
+      return signedIn() && request.auth.token.email is string
+        ? request.auth.token.email.lower()
+        : '';
+    }
+
+    function courtsideTeam(teamId) {
+      return get(/databases/$(database)/documents/courtsideTeams/$(teamId)).data;
+    }
+
+    function courtsideMember(teamId) {
+      return signedIn() &&
+        exists(/databases/$(database)/documents/courtsideTeams/$(teamId)) &&
+        request.auth.uid in courtsideTeam(teamId).memberUids;
+    }
+
+    function courtsideOwner(teamId) {
+      return signedIn() &&
+        exists(/databases/$(database)/documents/courtsideTeams/$(teamId)) &&
+        courtsideTeam(teamId).ownerUid == request.auth.uid;
+    }
+
+    function courtsideInvited(teamId) {
+      return courtsideEmail().size() > 0 &&
+        exists(/databases/$(database)/documents/courtsideTeams/$(teamId)) &&
+        courtsideEmail() in courtsideTeam(teamId).inviteEmails;
+    }
+
+    function courtsideTeamCreate() {
+      let d = request.resource.data;
+      return signedIn() &&
+        request.auth.token.firebase.sign_in_provider != 'anonymous' &&
+        d.keys().hasOnly(['name', 'ownerUid', 'memberUids', 'members', 'inviteEmails', 'createdAt', 'updatedAt']) &&
+        d.name is string && d.name.size() >= 2 && d.name.size() <= 80 &&
+        d.ownerUid == request.auth.uid &&
+        d.memberUids == [request.auth.uid] &&
+        d.members.keys().hasOnly([request.auth.uid]) &&
+        d.inviteEmails == [] &&
+        d.createdAt == request.time &&
+        d.updatedAt == request.time;
+    }
+
+    function courtsideTeamUpdate(teamId) {
+      let before = resource.data;
+      let after = request.resource.data;
+      let joining = courtsideInvited(teamId) &&
+        request.auth.uid in after.memberUids &&
+        !(request.auth.uid in before.memberUids) &&
+        after.ownerUid == before.ownerUid &&
+        after.name == before.name &&
+        after.inviteEmails.hasOnly(before.inviteEmails.removeAll([courtsideEmail()])) &&
+        after.memberUids.hasAll(before.memberUids) &&
+        after.memberUids.size() == before.memberUids.size() + 1 &&
+        after.members.keys().hasAll(before.members.keys()) &&
+        after.members[request.auth.uid] is map;
+      let leaving = request.auth.uid in before.memberUids &&
+        !(request.auth.uid in after.memberUids) &&
+        request.auth.uid != before.ownerUid &&
+        after.ownerUid == before.ownerUid &&
+        after.name == before.name &&
+        after.inviteEmails == before.inviteEmails &&
+        after.memberUids.hasOnly(before.memberUids.removeAll([request.auth.uid]));
+      let managing = courtsideOwner(teamId) &&
+        after.ownerUid == before.ownerUid &&
+        request.auth.uid in after.memberUids &&
+        after.name is string && after.name.size() >= 2 && after.name.size() <= 80 &&
+        after.memberUids is list &&
+        after.inviteEmails is list && after.inviteEmails.size() <= 20 &&
+        after.members is map;
+      return signedIn() &&
+        after.createdAt == before.createdAt &&
+        after.updatedAt == request.time &&
+        (joining || leaving || managing);
+    }
+
+    function courtsidePlayWrite(teamId) {
+      let d = request.resource.data;
+      return courtsideMember(teamId) &&
+        d.keys().hasOnly(['name', 'category', 'court', 'json', 'revision', 'createdBy', 'updatedBy', 'updatedByName', 'createdAt', 'updatedAt']) &&
+        d.name is string && d.name.size() > 0 && d.name.size() <= 200 &&
+        d.category is string && d.category.size() > 0 && d.category.size() <= 40 &&
+        d.court in ['half', 'full'] &&
+        d.json is string && d.json.size() > 0 && d.json.size() <= 900000 &&
+        d.revision is int &&
+        d.createdBy is string &&
+        d.updatedBy == request.auth.uid &&
+        d.updatedByName is string && d.updatedByName.size() <= 80 &&
+        d.createdAt is timestamp &&
+        d.updatedAt == request.time;
+    }
+
+    match /courtsideTeams/{teamId} {
+      allow read: if courtsideMember(teamId) || courtsideInvited(teamId);
+      allow create: if courtsideTeamCreate();
+      allow update: if courtsideTeamUpdate(teamId);
+      allow delete: if false;
+
+      match /plays/{playId} {
+        allow read: if courtsideMember(teamId);
+        allow create: if courtsidePlayWrite(teamId) &&
+          request.resource.data.createdBy == request.auth.uid &&
+          request.resource.data.revision == 1 &&
+          request.resource.data.createdAt == request.time;
+        allow update: if courtsidePlayWrite(teamId) &&
+          request.resource.data.createdBy == resource.data.createdBy &&
+          request.resource.data.createdAt == resource.data.createdAt &&
+          request.resource.data.revision == resource.data.revision + 1;
+        allow delete: if courtsideMember(teamId) &&
+          (resource.data.createdBy == request.auth.uid || courtsideOwner(teamId));
+      }
+    }
   }
 }
