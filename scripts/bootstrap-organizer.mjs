@@ -18,6 +18,12 @@ if (!email || !email.includes('@')) {
       email,
       updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
+    await getFirestore().doc(`organizerEmails/${email}`).set({
+      email,
+      active: true,
+      updatedAt: FieldValue.serverTimestamp(),
+      createdAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
     console.log(`Organizer access enabled for ${email}.`);
   } catch (error) {
     if (error.code === 'auth/configuration-not-found') {

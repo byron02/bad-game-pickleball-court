@@ -13,8 +13,215 @@ service cloud.firestore {
     function organizer() {
       return signedIn() &&
         request.auth.token.firebase.sign_in_provider != 'anonymous' &&
-        exists(/databases/$(database)/documents/organizers/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/organizers/$(request.auth.uid)).data.active == true;
+        (
+          (exists(/databases/$(database)/documents/organizers/$(request.auth.uid)) &&
+            get(/databases/$(database)/documents/organizers/$(request.auth.uid)).data.active == true) ||
+          (authEmail().size() > 0 &&
+            exists(/databases/$(database)/documents/organizerEmails/$(authEmail())) &&
+            get(/databases/$(database)/documents/organizerEmails/$(authEmail())).data.active == true)
+        );
+    }
+
+    function authEmail() {
+      return request.auth.token.email is string
+        ? request.auth.token.email.lower()
+        : '';
+    }
+
+    function validOrganizerEmail(email) {
+      return email is string &&
+        email.size() >= 5 &&
+        email.size() <= 254 &&
+        email == email.lower() &&
+        email.matches('^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$');
+    }
+
+    function validPlayPin(pin) {
+      return pin is string && pin.matches('^[0-9]{4}$');
+    }
+
+    function myPlayClaim(sessionId) {
+      return get(/databases/$(database)/documents/sessions/$(sessionId)/playClaims/$(request.auth.uid)).data;
+    }
+
+    function hasMyPlayClaim(sessionId) {
+      return exists(/databases/$(database)/documents/sessions/$(sessionId)/playClaims/$(request.auth.uid));
+    }
+
+    function playerControlsEntry(before) {
+      return before.status == 'confirmed' &&
+        (
+          before.get('playClaimUid', '') == request.auth.uid ||
+          (
+            before.get('hasPlayPin', false) != true &&
+            before.get('ownerUid', '') == request.auth.uid
+          )
+        );
+    }
+
+    function validPartnerGamesCount(value) {
+      return value == null || (value is int && value >= 1 && value <= 20);
+    }
+
+    function playerOwnAttendance() {
+      let before = resource.data;
+      let after = request.resource.data;
+      let changed = after.diff(before).affectedKeys();
+      return anonymousPlayer() &&
+        playerControlsEntry(before) &&
+        changed.hasOnly([
+          'checkedIn', 'checkedInAt', 'sittingOut', 'checkedOutAt',
+          'status', 'updatedAt', 'partnerPlayerId', 'partnerRequestToPlayerId',
+          'partnerRequestGames', 'partnerGamesRemaining',
+          'hasPlayPin', 'playClaimUid'
+        ]) &&
+        (
+          (
+            after.status == 'confirmed' &&
+            after.checkedIn is bool &&
+            after.get('sittingOut', false) is bool &&
+            (after.get('sittingOut', false) == false || after.checkedIn == true) &&
+            after.get('playClaimUid', null) == before.get('playClaimUid', null) &&
+            after.get('hasPlayPin', false) == before.get('hasPlayPin', false) &&
+            (
+              !changed.hasAny(['partnerPlayerId', 'partnerRequestToPlayerId', 'partnerRequestGames', 'partnerGamesRemaining']) ||
+              (
+                after.get('partnerPlayerId', null) == before.get('partnerPlayerId', null) &&
+                after.get('partnerGamesRemaining', null) == before.get('partnerGamesRemaining', null) &&
+                (
+                  after.get('partnerRequestToPlayerId', null) == null ||
+                  (after.get('partnerRequestToPlayerId', null) is string &&
+                    after.get('partnerRequestToPlayerId', null) != before.get('playerId', ''))
+                ) &&
+                validPartnerGamesCount(after.get('partnerRequestGames', null))
+              )
+            )
+          ) ||
+          (
+            after.status == 'checked_out' &&
+            after.checkedIn == false &&
+            after.get('sittingOut', false) == false &&
+            after.get('partnerPlayerId', null) == null &&
+            after.get('partnerRequestToPlayerId', null) == null &&
+            after.get('partnerRequestGames', null) == null &&
+            after.get('partnerGamesRemaining', null) == null
+          )
+        );
+    }
+
+    // First-time PIN set or re-claim after unlock mirrors claim onto the entry.
+    function playerPinClaimEntry(sessionId, entryId) {
+      let before = resource.data;
+      let after = request.resource.data;
+      let changed = after.diff(before).affectedKeys();
+      return anonymousPlayer() &&
+        before.status == 'confirmed' &&
+        (
+          (
+            changed.hasOnly(['hasPlayPin', 'playClaimUid', 'updatedAt']) &&
+            after.hasPlayPin == true &&
+            after.playClaimUid == request.auth.uid &&
+            hasMyPlayClaim(sessionId) &&
+            myPlayClaim(sessionId).entryId == entryId
+          ) ||
+          (
+            // Release a previous phone claim when unlocking a different name.
+            before.playClaimUid == request.auth.uid &&
+            changed.hasOnly(['playClaimUid', 'updatedAt']) &&
+            after.playClaimUid == null
+          )
+        );
+    }
+
+    // Mutual doubles requests: pending requests stay solo in draws until both lock.
+    function playerPartnerUpdate(sessionId, entryId) {
+      let before = resource.data;
+      let after = request.resource.data;
+      let changed = after.diff(before).affectedKeys();
+      let myPlayerId = myPlayClaim(sessionId).playerId;
+      return anonymousPlayer() &&
+        hasMyPlayClaim(sessionId) &&
+        myPlayerId is string &&
+        myPlayerId.size() > 0 &&
+        before.status == 'confirmed' &&
+        (
+          (
+            // Approve or decline an inbound request on the requester's entry.
+            entryId != myPlayClaim(sessionId).entryId &&
+            before.get('partnerRequestToPlayerId', null) == myPlayerId &&
+            (
+              (
+                changed.hasOnly(['partnerRequestToPlayerId', 'partnerRequestGames', 'updatedAt']) &&
+                after.get('partnerRequestToPlayerId', null) == null &&
+                after.get('partnerRequestGames', null) == null
+              ) ||
+              (
+                changed.hasOnly(['partnerRequestToPlayerId', 'partnerPlayerId', 'partnerRequestGames', 'partnerGamesRemaining', 'updatedAt']) &&
+                after.get('partnerRequestToPlayerId', null) == null &&
+                after.get('partnerRequestGames', null) == null &&
+                after.get('partnerPlayerId', null) == myPlayerId &&
+                validPartnerGamesCount(after.get('partnerGamesRemaining', null))
+              )
+            )
+          ) ||
+          (
+            // Clear the other half when either partner unpairs.
+            entryId != myPlayClaim(sessionId).entryId &&
+            before.get('partnerPlayerId', null) == myPlayerId &&
+            changed.hasOnly(['partnerPlayerId', 'partnerRequestGames', 'partnerGamesRemaining', 'updatedAt']) &&
+            after.get('partnerPlayerId', null) == null &&
+            after.get('partnerRequestGames', null) == null &&
+            after.get('partnerGamesRemaining', null) == null
+          ) ||
+          (
+            // Own claimed entry: send/cancel request, accept mutual lock, or unpair self.
+            entryId == myPlayClaim(sessionId).entryId &&
+            playerControlsEntry(before) &&
+            changed.hasOnly(['partnerPlayerId', 'partnerRequestToPlayerId', 'partnerRequestGames', 'partnerGamesRemaining', 'updatedAt']) &&
+            (
+              (
+                after.get('partnerPlayerId', null) == before.get('partnerPlayerId', null) &&
+                after.get('partnerGamesRemaining', null) == before.get('partnerGamesRemaining', null) &&
+                (
+                  after.get('partnerRequestToPlayerId', null) == null ||
+                  (after.get('partnerRequestToPlayerId', null) is string &&
+                    after.get('partnerRequestToPlayerId', null) != myPlayerId)
+                ) &&
+                validPartnerGamesCount(after.get('partnerRequestGames', null))
+              ) ||
+              (
+                after.get('partnerRequestToPlayerId', null) == null &&
+                after.get('partnerRequestGames', null) == null &&
+                (
+                  after.get('partnerPlayerId', null) == null ||
+                  after.get('partnerPlayerId', null) is string
+                ) &&
+                validPartnerGamesCount(after.get('partnerGamesRemaining', null))
+              )
+            )
+          )
+        );
+    }
+
+    function playerSessionAttendanceBump() {
+      let before = resource.data;
+      let after = request.resource.data;
+      let changed = after.diff(before).affectedKeys();
+      return anonymousPlayer() &&
+        before.open == true &&
+        changed.hasOnly(['checkedInCount', 'confirmedCount', 'updatedAt']) &&
+        after.checkedInCount is int &&
+        after.checkedInCount >= 0 &&
+        after.checkedInCount <= after.confirmedCount &&
+        after.confirmedCount is int &&
+        after.confirmedCount >= 0 &&
+        after.confirmedCount <= before.capacity &&
+        (
+          (after.checkedInCount == before.checkedInCount + 1 && after.confirmedCount == before.confirmedCount) ||
+          (after.checkedInCount == before.checkedInCount - 1 && after.confirmedCount == before.confirmedCount) ||
+          (after.checkedInCount == before.checkedInCount && after.confirmedCount == before.confirmedCount - 1) ||
+          (after.checkedInCount == before.checkedInCount - 1 && after.confirmedCount == before.confirmedCount - 1)
+        );
     }
 
     function validName(name) {
@@ -38,8 +245,7 @@ service cloud.firestore {
     }
 
     function validSession(data) {
-      return data.date is string && data.closesAt is timestamp &&
-        data.capacity is int && data.capacity >= 1 && data.capacity <= 512 &&
+      return data.capacity is int && data.capacity >= 1 && data.capacity <= 512 &&
         data.confirmedCount is int && data.confirmedCount >= 0 &&
         data.confirmedCount <= data.capacity &&
         data.checkedInCount is int && data.checkedInCount >= 0 &&
@@ -50,18 +256,11 @@ service cloud.firestore {
         data.open is bool;
     }
 
-    function publicSessionOpen(sessionId) {
-      let session = get(/databases/$(database)/documents/sessions/$(sessionId));
-      return session.data.open == true &&
-        (!session.data.keys().hasAny(['kind']) || session.data.kind != 'event') &&
-        session.data.closesAt is timestamp &&
-        request.time < session.data.closesAt;
-    }
-
     function validPublicRequest(sessionId, entryId) {
       let data = request.resource.data;
+      let session = get(/databases/$(database)/documents/sessions/$(sessionId));
       return anonymousPlayer() && entryId == request.auth.uid &&
-        publicSessionOpen(sessionId) &&
+        session.data.open == true &&
         data.keys().hasOnly([
           'sessionId', 'ownerUid', 'playerId', 'name', 'skillLevel',
           'division', 'photoData', 'status', 'checkedIn', 'source',
@@ -87,27 +286,57 @@ service cloud.firestore {
         (
           data.playerId == null ||
           (data.playerId is string &&
-            exists(/databases/$(database)/documents/playerDirectory/$(data.playerId)) &&
-            get(/databases/$(database)/documents/playerDirectory/$(data.playerId)).data.active == true &&
-            get(/databases/$(database)/documents/playerDirectory/$(data.playerId)).data.name == data.name &&
-            get(/databases/$(database)/documents/playerDirectory/$(data.playerId)).data.skillLevel == data.skillLevel &&
-            get(/databases/$(database)/documents/playerDirectory/$(data.playerId)).data.division == data.division)
+            exists(/databases/$(database)/documents/players/$(data.playerId)) &&
+            get(/databases/$(database)/documents/players/$(data.playerId)).data.active == true &&
+            get(/databases/$(database)/documents/players/$(data.playerId)).data.name == data.name &&
+            get(/databases/$(database)/documents/players/$(data.playerId)).data.skillLevel == data.skillLevel &&
+            get(/databases/$(database)/documents/players/$(data.playerId)).data.division == data.division)
         );
     }
 
     match /organizers/{uid} {
-      // Add the first organizer document from Firebase Console or Admin SDK.
-      // Clients cannot grant themselves organizer access.
-      allow get: if signedIn() && request.auth.uid == uid;
-      allow list, create, update, delete: if false;
+      // Legacy UID docs (bootstrap / synced accounts). Email access is managed in
+      // organizerEmails; signed-in users may sync their own UID doc when listed.
+      allow get: if signedIn() && (request.auth.uid == uid || organizer());
+      allow list: if organizer();
+      allow create, update: if signedIn() &&
+        request.auth.uid == uid &&
+        authEmail().size() > 0 &&
+        request.resource.data.active == true &&
+        validOrganizerEmail(request.resource.data.email) &&
+        request.resource.data.email == authEmail() &&
+        exists(/databases/$(database)/documents/organizerEmails/$(authEmail())) &&
+        get(/databases/$(database)/documents/organizerEmails/$(authEmail())).data.active == true;
+      allow update: if organizer() &&
+        request.resource.data.active is bool &&
+        (!request.resource.data.keys().hasAny(['email']) ||
+          request.resource.data.email == null ||
+          validOrganizerEmail(request.resource.data.email));
+      allow delete: if false;
+    }
+
+    match /organizerEmails/{email} {
+      allow get: if organizer() || (signedIn() && authEmail() == email);
+      allow list: if organizer();
+      allow create, update: if organizer() &&
+        validOrganizerEmail(email) &&
+        request.resource.data.email == email &&
+        request.resource.data.active is bool;
+      allow delete: if organizer();
     }
 
     match /daySessions/{date} {
-      allow read, write: if organizer();
+      // Players may resolve today's desk/signup pointer by exact date get only.
+      allow get: if organizer() || anonymousPlayer();
+      allow list: if organizer();
+      allow create, update, delete: if organizer();
     }
 
     match /players/{playerId} {
-      allow get, list: if organizer();
+      allow get: if organizer() || (anonymousPlayer() && resource.data.active == true);
+      allow list: if organizer() ||
+        (anonymousPlayer() && request.query.limit != null &&
+          request.query.limit <= 20 && resource.data.active == true);
       allow create, update: if organizer() &&
         validName(request.resource.data.name) &&
         validSkill(request.resource.data.skillLevel) &&
@@ -119,54 +348,104 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // Public search exposes a small approved directory. The full player
-    // profile, including lifetime match statistics, stays organizer-managed.
+    // Public search and lifetime standings use this approved directory.
+    // Full player records stay in /players and remain organizer-managed.
     match /playerDirectory/{playerId} {
-      allow get: if anonymousPlayer() && resource.data.active == true;
-      allow list: if anonymousPlayer() && request.query.limit != null &&
-        request.query.limit <= 512 && resource.data.active == true;
-      allow create, update: if organizer() &&
-        request.resource.data.keys().hasOnly([
-          'name', 'nameLower', 'searchPrefixes', 'skillLevel',
-          'division', 'photoData', 'active'
-        ]) &&
-        request.resource.data.keys().hasAll([
-          'name', 'nameLower', 'searchPrefixes', 'skillLevel',
-          'division', 'photoData', 'active'
-        ]) &&
-        validName(request.resource.data.name) &&
-        request.resource.data.nameLower is string &&
-        request.resource.data.searchPrefixes is list &&
-        validSkill(request.resource.data.skillLevel) &&
-        validDivision(request.resource.data.division) &&
-        validPhoto(request.resource.data.photoData) &&
-        request.resource.data.active is bool;
-      allow delete: if organizer();
+      allow get: if organizer() || anonymousPlayer();
+      allow list: if organizer() ||
+        (anonymousPlayer() && request.query.limit != null &&
+          request.query.limit <= 20);
+      allow create, update, delete: if organizer();
     }
 
     match /sessions/{sessionId} {
       // A random document ID is the share token. Public clients cannot list
       // sessions or discover a token from the day index.
-      allow get: if organizer() ||
-        (anonymousPlayer() && resource.data.open == true &&
-          (!resource.data.keys().hasAny(['kind']) || resource.data.kind != 'event') &&
-          resource.data.closesAt is timestamp && request.time < resource.data.closesAt);
+      allow get: if organizer() || (anonymousPlayer() && resource.data.open == true);
       allow list: if organizer();
-      allow create, update: if organizer() && validSession(request.resource.data);
+      allow create, update: if (organizer() && validSession(request.resource.data)) ||
+        playerSessionAttendanceBump();
       allow delete: if false;
 
       match /entries/{entryId} {
         allow get: if organizer() ||
-          (anonymousPlayer() && entryId == request.auth.uid && publicSessionOpen(sessionId)) ||
-          (signedIn() && resource.data.ownerUid == request.auth.uid && publicSessionOpen(sessionId));
-        allow list: if organizer();
+          (anonymousPlayer() && entryId == request.auth.uid) ||
+          (signedIn() && resource.data.ownerUid == request.auth.uid) ||
+          (anonymousPlayer() &&
+            get(/databases/$(database)/documents/sessions/$(sessionId)).data.open == true &&
+            resource.data.status == 'confirmed');
+        allow list: if organizer() ||
+          (anonymousPlayer() &&
+            get(/databases/$(database)/documents/sessions/$(sessionId)).data.open == true &&
+            resource.data.status == 'confirmed');
         allow create: if organizer() || validPublicRequest(sessionId, entryId);
-        allow update: if organizer();
+        allow update: if organizer() ||
+          playerOwnAttendance() ||
+          playerPinClaimEntry(sessionId, entryId) ||
+          playerPartnerUpdate(sessionId, entryId);
         allow delete: if false;
       }
 
+      // PIN is never readable by players (get denied). Create sets it; unlock
+      // proves knowledge by sending the same pin back on update; organizers can delete.
+      match /entryPins/{entryId} {
+        allow get, list: if organizer();
+        allow create: if anonymousPlayer() &&
+          exists(/databases/$(database)/documents/sessions/$(sessionId)/entries/$(entryId)) &&
+          get(/databases/$(database)/documents/sessions/$(sessionId)/entries/$(entryId)).data.status == 'confirmed' &&
+          get(/databases/$(database)/documents/sessions/$(sessionId)/entries/$(entryId)).data.get('hasPlayPin', false) != true &&
+          validPlayPin(request.resource.data.pin) &&
+          request.resource.data.claimUid == request.auth.uid &&
+          request.resource.data.keys().hasOnly(['pin', 'claimUid', 'updatedAt']);
+        allow update: if organizer() ||
+          (anonymousPlayer() &&
+            validPlayPin(request.resource.data.pin) &&
+            request.resource.data.claimUid == request.auth.uid &&
+            (
+              (
+                // Unlock: prove the existing PIN, then claim this phone.
+                request.resource.data.pin == resource.data.pin &&
+                request.resource.data.diff(resource.data).affectedKeys().hasOnly(['claimUid', 'updatedAt'])
+              ) ||
+              (
+                // Finish a partial create when the entry still has no PIN flag.
+                get(/databases/$(database)/documents/sessions/$(sessionId)/entries/$(entryId)).data.get('hasPlayPin', false) != true &&
+                request.resource.data.diff(resource.data).affectedKeys()
+                  .hasOnly(['pin', 'claimUid', 'updatedAt'])
+              )
+            ));
+        allow delete: if organizer();
+      }
+
+      match /playClaims/{uid} {
+        allow get: if organizer() || (anonymousPlayer() && uid == request.auth.uid);
+        allow list: if organizer();
+        allow create, update: if anonymousPlayer() &&
+          uid == request.auth.uid &&
+          request.resource.data.keys().hasOnly(['entryId', 'playerId', 'updatedAt']) &&
+          request.resource.data.entryId is string &&
+          request.resource.data.entryId.size() > 0 &&
+          (request.resource.data.playerId == null || request.resource.data.playerId is string) &&
+          exists(/databases/$(database)/documents/sessions/$(sessionId)/entries/$(request.resource.data.entryId)) &&
+          get(/databases/$(database)/documents/sessions/$(sessionId)/entries/$(request.resource.data.entryId)).data.status == 'confirmed' &&
+          exists(/databases/$(database)/documents/sessions/$(sessionId)/entryPins/$(request.resource.data.entryId)) &&
+          get(/databases/$(database)/documents/sessions/$(sessionId)/entryPins/$(request.resource.data.entryId)).data.claimUid == request.auth.uid;
+        allow delete: if organizer() || (anonymousPlayer() && uid == request.auth.uid);
+      }
+
       match /playerClaims/{playerId} {
-        allow read, write: if organizer();
+        // Players need get (not list) so /play can resolve a partner's entry
+        // when requesting, approving, or clearing a doubles pair.
+        allow get: if organizer() ||
+          (anonymousPlayer() &&
+            get(/databases/$(database)/documents/sessions/$(sessionId)).data.open == true);
+        allow list: if organizer();
+        allow create, update: if organizer();
+        allow delete: if organizer() ||
+          (anonymousPlayer() && resource.data.entryId == request.auth.uid) ||
+          (anonymousPlayer() &&
+            hasMyPlayClaim(sessionId) &&
+            myPlayClaim(sessionId).entryId == resource.data.entryId);
       }
 
       match /playerLocks/{playerId} {
@@ -174,12 +453,16 @@ service cloud.firestore {
       }
 
       match /games/{gameId} {
-        allow read, write: if organizer();
+        allow read: if organizer() ||
+          (anonymousPlayer() &&
+            get(/databases/$(database)/documents/sessions/$(sessionId)).data.open == true);
+        allow write: if organizer();
       }
     }
 
     match /courts/{courtId} {
-      allow read, write: if organizer();
+      allow read: if organizer() || anonymousPlayer();
+      allow write: if organizer();
     }
 
     function eventSignupOpen(eventId) {

@@ -5,9 +5,7 @@ import {
   getDoc,
   getDocs,
   getFirestore,
-  limit,
   onSnapshot,
-  orderBy,
   query,
   runTransaction,
   serverTimestamp,
@@ -20,6 +18,8 @@ import {
   recordGameResult,
   validateCourtConfig,
   validateLineup,
+  courtPoolSummary,
+  eligiblePlayersForCourt,
 } from './domain/courts.js';
 
 const app = getApps()[0] || initializeApp(firebaseConfig);
@@ -56,6 +56,7 @@ function gameRef(sessionId, gameId) {
   return doc(db, 'sessions', idOf(sessionId, 'Session id'), 'games', idOf(gameId, 'Game id'));
 }
 function playerRef(id) { return doc(db, 'players', idOf(id, 'Player id')); }
+function directoryRef(id) { return doc(db, 'playerDirectory', idOf(id, 'Player id')); }
 function entryRef(sessionId, id) {
   return doc(db, 'sessions', idOf(sessionId, 'Session id'), 'entries', idOf(id, 'Entry id'));
 }
@@ -69,11 +70,14 @@ function lockRef(sessionId, playerId) {
 async function ensureOrganizer() {
   const user = await getCurrentUser();
   if (!user || user.isAnonymous) throw error('Organizer sign-in is required.', 'auth-required');
-  const permit = await getDoc(doc(db, 'organizers', user.uid));
-  if (!permit.exists() || permit.data().active !== true) {
-    throw error('This account is not an approved organizer.', 'permission-denied');
+  const uidPermit = await getDoc(doc(db, 'organizers', user.uid));
+  if (uidPermit.exists() && uidPermit.data().active === true) return user;
+  const email = String(user.email || '').trim().toLowerCase();
+  if (email) {
+    const emailPermit = await getDoc(doc(db, 'organizerEmails', email));
+    if (emailPermit.exists() && emailPermit.data().active === true) return user;
   }
-  return user;
+  throw error('This account is not an approved organizer.', 'permission-denied');
 }
 
 function normalizedCourt(snapshot) {
@@ -118,31 +122,6 @@ function sortedCourts(snapshots) {
 function sortedGames(snapshots) {
   return snapshots.docs.map(normalizedGame).sort((a, b) =>
     (b.startedAt || '').localeCompare(a.startedAt || ''));
-}
-
-function gamesCollection(sessionId) {
-  return collection(db, 'sessions', idOf(sessionId, 'Session id'), 'games');
-}
-
-function activeGamesQuery(sessionId) {
-  return query(gamesCollection(sessionId), where('status', '==', 'active'));
-}
-
-function recentResultsQuery(sessionId) {
-  // Every completed game has completedAt. A single-field descending index
-  // puts incomplete games (whose value is null) after the recent results.
-  return query(gamesCollection(sessionId), orderBy('completedAt', 'desc'), limit(10));
-}
-
-function recentResults(snapshot) {
-  return snapshot.docs.map(normalizedGame)
-    .filter((game) => game.status === 'completed' && game.result?.winnerSide);
-}
-
-function mergeVisibleGames(active, results) {
-  const byId = new Map([...active, ...results].map((game) => [game.id, game]));
-  return [...byId.values()].sort((a, b) =>
-    (b.completedAt || b.startedAt || '').localeCompare(a.completedAt || a.startedAt || ''));
 }
 
 /** Reusable physical courts; all access is organizer-only. */
@@ -205,41 +184,17 @@ export async function deleteCourt(courtId) {
   return { deleted: true };
 }
 
-/** Active games and the ten most recent results for a single day session. */
+/** Current and historical games for a single day session. */
 export async function listCourtGames(sessionId) {
   await ensureOrganizer();
-  const [active, results] = await Promise.all([
-    getDocs(activeGamesQuery(sessionId)), getDocs(recentResultsQuery(sessionId)),
-  ]);
-  return { games: mergeVisibleGames(sortedGames(active), recentResults(results)) };
+  return { games: sortedGames(await getDocs(collection(db, 'sessions', idOf(sessionId, 'Session id'), 'games'))) };
 }
 
 export async function watchCourtGames(sessionId, callback) {
   await ensureOrganizer();
-  let active = null;
-  let results = null;
-  let stopped = false;
-  let stopActive = () => {};
-  let stopResults = () => {};
-  const emit = () => {
-    if (!stopped && active && results) callback({ games: mergeVisibleGames(active, results) });
-  };
-  const fail = (cause) => {
-    if (stopped) return;
-    stopped = true;
-    stopActive();
-    stopResults();
-    callback({ error: cause });
-  };
-  stopActive = onSnapshot(activeGamesQuery(sessionId),
-    (snapshot) => { active = sortedGames(snapshot); emit(); }, fail);
-  stopResults = onSnapshot(recentResultsQuery(sessionId),
-    (snapshot) => { results = recentResults(snapshot); emit(); }, fail);
-  return () => {
-    stopped = true;
-    stopActive();
-    stopResults();
-  };
+  return onSnapshot(collection(db, 'sessions', idOf(sessionId, 'Session id'), 'games'),
+    (snapshot) => callback({ games: sortedGames(snapshot) }),
+    (cause) => callback({ error: cause }));
 }
 
 function domainPlayer(entry) {
@@ -249,6 +204,8 @@ function domainPlayer(entry) {
     skill: entry.skillLevel,
     gender: entry.division || 'unspecified',
     checkedIn: entry.status === 'confirmed' && entry.checkedIn === true,
+    sittingOut: entry.sittingOut === true,
+    partnerId: entry.partnerPlayerId || null,
   };
 }
 
@@ -270,16 +227,39 @@ function idsOf(lineup) {
   return ids;
 }
 
-function statsFromEntry(entry, now = Date.now()) {
-  const recent = Array.isArray(entry.recentMatches) ? entry.recentMatches.slice(0, 4) : [];
-  const lastPlayedAt = millis(recent[0]?.completedAt);
-  return {
+function statsFromGames(entries, games, now = Date.now()) {
+  const byId = new Map(entries.filter((entry) => entry.playerId).map((entry) => [entry.playerId, {
     ...domainPlayer(entry),
-    gamesPlayed: Math.max(0, Number(entry.wins || 0)) + Math.max(0, Number(entry.losses || 0)),
-    waitMinutes: Math.max(0, (now - (lastPlayedAt || millis(entry.checkedInAt))) / 60000),
-    recentPartnerIds: recent.flatMap((match) => match.partnerIds || []),
-    recentOpponentIds: recent.flatMap((match) => match.opponentIds || []),
-  };
+    gamesPlayed: 0,
+    waitMinutes: Math.max(0, (now - millis(entry.checkedInAt)) / 60000),
+    recentPartnerIds: [],
+    recentOpponentIds: [],
+    lastPlayedAt: 0,
+  }]));
+  const completed = games.filter((game) => game.status === 'completed' && game.lineup)
+    .sort((a, b) => millis(b.completedAt) - millis(a.completedAt));
+  for (const game of completed) {
+    const a = game.lineup.sideA || [];
+    const b = game.lineup.sideB || [];
+    const ended = millis(game.completedAt);
+    for (const [teammates, opponents] of [[a, b], [b, a]]) {
+      for (const id of teammates) {
+        const player = byId.get(id);
+        if (!player) continue;
+        player.gamesPlayed += 1;
+        player.lastPlayedAt = Math.max(player.lastPlayedAt, ended);
+        if (player.gamesPlayed <= 4) {
+          player.recentPartnerIds.push(...teammates.filter((other) => other !== id));
+          player.recentOpponentIds.push(...opponents);
+        }
+      }
+    }
+  }
+  for (const player of byId.values()) {
+    if (player.lastPlayedAt) player.waitMinutes = Math.max(0, (now - player.lastPlayedAt) / 60000);
+    delete player.lastPlayedAt;
+  }
+  return [...byId.values()];
 }
 
 /** Suggest (and re-suggest) teams without writing a game. */
@@ -288,25 +268,28 @@ export async function proposeCourtLineup({ sessionId, courtId, random = Math.ran
   const [court, session, entries, games] = await Promise.all([
     getDoc(courtRef(courtId)),
     getDoc(sessionRef(sessionId)),
-    getDocs(query(collection(db, 'sessions', idOf(sessionId, 'Session id'), 'entries'),
-      where('status', '==', 'confirmed'))),
-    getDocs(activeGamesQuery(sessionId)),
+    getDocs(collection(db, 'sessions', idOf(sessionId, 'Session id'), 'entries')),
+    getDocs(collection(db, 'sessions', sessionId, 'games')),
   ]);
   if (!court.exists()) throw error('Court not found.', 'not-found');
   if (!session.exists() || session.data().open !== true) throw error('This session is closed.');
-  // A player may have an older checked-out entry in this session. Only their
-  // current confirmed, checked-in reservation is eligible for a new draw.
-  const roster = entries.docs.map((snapshot) => snapshot.data())
-    .filter((entry) => entry.checkedIn === true && entry.playerId);
-  const activeGames = games.docs.map((snapshot) => ({ id: snapshot.id, ...snapshot.data() }));
-  const players = roster.map((entry) => statsFromEntry(entry));
+  const roster = entries.docs.map((snapshot) => snapshot.data());
+  const history = games.docs.map((snapshot) => ({ id: snapshot.id, ...snapshot.data() }));
+  const players = statsFromGames(roster, history);
+  const pool = courtPoolSummary({ players, activeGames: history });
+  const eligible = eligiblePlayersForCourt({
+    court: { id: court.id, ...court.data() },
+    players,
+    activeGames: history,
+  });
   const lineup = proposeLineup({
     court: { id: court.id, ...court.data() },
     players,
-    activeGames,
+    activeGames: history,
     random,
   });
   const selected = lineup ? new Set(idsOf(lineup)) : new Set();
+  const byId = new Map(players.map((player) => [player.id, player]));
   return {
     lineup,
     players: roster.filter((entry) => selected.has(entry.playerId)).map((entry) => ({
@@ -315,7 +298,154 @@ export async function proposeCourtLineup({ sessionId, courtId, random = Math.ran
       skillLevel: entry.skillLevel,
       division: entry.division || 'unspecified',
       photoUrl: entry.photoData || null,
+      gamesPlayed: byId.get(entry.playerId)?.gamesPlayed || 0,
     })),
+    pool: {
+      ...pool,
+      eligible: eligible.length,
+      needed: court.data().format === 'singles' ? 2 : 4,
+    },
+  };
+}
+
+function lineupPlayerIds(lineup) {
+  return [...(lineup?.sideA || []), ...(lineup?.sideB || [])];
+}
+
+function namesForLineup(lineup, nameById) {
+  const label = (ids) => (ids || []).map((id) => nameById.get(id) || 'Player').join(' + ');
+  return {
+    sideA: label(lineup?.sideA),
+    sideB: label(lineup?.sideB),
+  };
+}
+
+/**
+ * Player desk board: active court assignment plus the same “up next” draw the
+ * organizer preview uses (pending pairs stay solo until both lock).
+ */
+export async function loadPublicPlayBoard(sessionId, playerId = null) {
+  const sid = idOf(sessionId, 'Session id');
+  const [courtsSnap, gamesSnap, entriesSnap] = await Promise.all([
+    getDocs(collection(db, 'courts')),
+    getDocs(collection(db, 'sessions', sid, 'games')),
+    getDocs(query(collection(db, 'sessions', sid, 'entries'), where('status', '==', 'confirmed'))),
+  ]);
+  const courts = sortedCourts(courtsSnap);
+  const games = sortedGames(gamesSnap);
+  const roster = entriesSnap.docs.map((snapshot) => ({ id: snapshot.id, ...snapshot.data() }));
+  const nameById = new Map(roster.filter((entry) => entry.playerId).map((entry) => [entry.playerId, entry.name]));
+  for (const game of games) {
+    for (const [id, snap] of Object.entries(game.playerSnapshots || {})) {
+      if (!nameById.has(id) && snap?.name) nameById.set(id, snap.name);
+    }
+  }
+  const players = statsFromGames(roster, games);
+  const active = games.filter((game) => game.status === 'active');
+  const playingGame = playerId
+    ? active.find((game) => lineupPlayerIds(game.lineup).includes(playerId))
+    : null;
+
+  const nextByCourt = [];
+  for (const court of courts) {
+    const lineup = proposeLineup({
+      court: { id: court.id, ...court },
+      players,
+      activeGames: games,
+      random: () => 0.37,
+    });
+    if (!lineup) continue;
+    nextByCourt.push({
+      courtId: court.id,
+      courtName: court.name,
+      lineup,
+      labels: namesForLineup(lineup, nameById),
+      includesMe: playerId ? lineupPlayerIds(lineup).includes(playerId) : false,
+    });
+  }
+
+  const myNext = nextByCourt.find((item) => item.includesMe) || null;
+  return {
+    courts,
+    activeGames: active.map((game) => ({
+      id: game.id,
+      courtId: game.courtId,
+      courtName: game.courtName,
+      lineup: game.lineup,
+      labels: namesForLineup(game.lineup, nameById),
+      includesMe: playerId ? lineupPlayerIds(game.lineup).includes(playerId) : false,
+    })),
+    nextByCourt,
+    assignment: playingGame
+      ? {
+        kind: 'playing',
+        courtId: playingGame.courtId,
+        courtName: playingGame.courtName || 'Court',
+        lineup: playingGame.lineup,
+        labels: namesForLineup(playingGame.lineup, nameById),
+      }
+      : myNext
+        ? {
+          kind: 'next',
+          courtId: myNext.courtId,
+          courtName: myNext.courtName,
+          lineup: myNext.lineup,
+          labels: myNext.labels,
+        }
+        : { kind: 'waiting' },
+  };
+}
+
+export function watchPublicPlayBoard(sessionId, playerId, callback) {
+  const sid = idOf(sessionId, 'Session id');
+  let courts = [];
+  let games = [];
+  let roster = [];
+  let stopped = false;
+
+  const emit = async () => {
+    if (stopped) return;
+    try {
+      const board = await loadPublicPlayBoard(sid, playerId);
+      if (!stopped) callback(board);
+    } catch (cause) {
+      if (!stopped) callback(null, cause);
+    }
+  };
+
+  // Debounce rapid multi-listener ticks into one board rebuild.
+  let timer = null;
+  const schedule = () => {
+    clearTimeout(timer);
+    timer = setTimeout(emit, 80);
+  };
+
+  const stopCourts = onSnapshot(collection(db, 'courts'), (snapshot) => {
+    courts = sortedCourts(snapshot);
+    schedule();
+  }, (cause) => callback(null, cause));
+  const stopGames = onSnapshot(collection(db, 'sessions', sid, 'games'), (snapshot) => {
+    games = sortedGames(snapshot);
+    schedule();
+  }, (cause) => callback(null, cause));
+  const stopEntries = onSnapshot(
+    query(collection(db, 'sessions', sid, 'entries'), where('status', '==', 'confirmed')),
+    (snapshot) => {
+      roster = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
+      schedule();
+    },
+    (cause) => callback(null, cause),
+  );
+
+  return () => {
+    stopped = true;
+    clearTimeout(timer);
+    stopCourts();
+    stopGames();
+    stopEntries();
+    void courts;
+    void games;
+    void roster;
   };
 }
 
@@ -502,7 +632,6 @@ export async function completeCourtGame({ sessionId, gameId, winnerSide }) {
     const entries = await readLineupEntries(transaction, sessionId, ids);
     const players = await Promise.all(ids.map((id) => transaction.get(playerRef(id))));
     if (players.some((player) => !player.exists())) throw error('A player record is missing.');
-    const completedAt = new Date().toISOString();
 
     transaction.update(reference, {
       status: 'completed',
@@ -537,29 +666,64 @@ export async function completeCourtGame({ sessionId, gameId, winnerSide }) {
         byUid: user.uid, at: serverTimestamp(),
       });
     }
+    const partnerPatchByPath = new Map();
+    const consumed = new Set();
+    const entryByPlayer = new Map(entries.map((snap) => [snap.data().playerId, snap]));
+    for (const side of [data.lineup?.sideA || [], data.lineup?.sideB || []]) {
+      if (side.length !== 2) continue;
+      const [aId, bId] = side;
+      const aEntry = entryByPlayer.get(aId);
+      const bEntry = entryByPlayer.get(bId);
+      if (!aEntry || !bEntry) continue;
+      const a = aEntry.data();
+      const b = bEntry.data();
+      if (a.partnerPlayerId !== bId || b.partnerPlayerId !== aId) continue;
+      const key = [aId, bId].sort().join(':');
+      if (consumed.has(key)) continue;
+      consumed.add(key);
+      const remaining = Number.isInteger(a.partnerGamesRemaining)
+        ? a.partnerGamesRemaining
+        : (Number.isInteger(b.partnerGamesRemaining) ? b.partnerGamesRemaining : null);
+      if (remaining == null) continue;
+      if (remaining <= 1) {
+        const clear = {
+          partnerPlayerId: null,
+          partnerRequestToPlayerId: null,
+          partnerRequestGames: null,
+          partnerGamesRemaining: null,
+        };
+        partnerPatchByPath.set(aEntry.ref.path, clear);
+        partnerPatchByPath.set(bEntry.ref.path, clear);
+      } else {
+        const next = { partnerGamesRemaining: remaining - 1 };
+        partnerPatchByPath.set(aEntry.ref.path, next);
+        partnerPatchByPath.set(bEntry.ref.path, next);
+      }
+    }
+
     for (let i = 0; i < ids.length; i += 1) {
       const delta = recorded.statDeltas[ids[i]];
       const player = players[i].data();
       const entry = entries[i].data();
-      const teammates = data.lineup.sideA.includes(ids[i])
-        ? data.lineup.sideA : data.lineup.sideB;
-      const opponents = teammates === data.lineup.sideA
-        ? data.lineup.sideB : data.lineup.sideA;
-      const recentMatches = [{
-        completedAt,
-        partnerIds: teammates.filter((id) => id !== ids[i]),
-        opponentIds: [...opponents],
-      }, ...(Array.isArray(entry.recentMatches) ? entry.recentMatches : [])].slice(0, 4);
+      const wins = (player.wins || 0) + delta.wins;
+      const losses = (player.losses || 0) + delta.losses;
       transaction.update(playerRef(ids[i]), {
-        wins: (player.wins || 0) + delta.wins,
-        losses: (player.losses || 0) + delta.losses,
-        updatedAt: serverTimestamp(),
+        wins, losses, updatedAt: serverTimestamp(),
       });
+      transaction.set(directoryRef(ids[i]), {
+        name: player.name,
+        nameLower: player.nameLower || String(player.name || '').toLocaleLowerCase(),
+        skillLevel: player.skillLevel,
+        division: player.division || 'unspecified',
+        photoData: player.photoData || null,
+        wins,
+        losses,
+      }, { merge: true });
       transaction.update(entries[i].ref, {
         wins: (entry.wins || 0) + delta.wins,
         losses: (entry.losses || 0) + delta.losses,
-        recentMatches,
         updatedAt: serverTimestamp(),
+        ...(partnerPatchByPath.get(entries[i].ref.path) || {}),
       });
       transaction.delete(lockRef(sessionId, ids[i]));
     }
